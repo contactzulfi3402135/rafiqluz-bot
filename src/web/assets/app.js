@@ -189,11 +189,13 @@ setInterval(notifBadge, 60000);
 /* ── 3 · SHELL (6-area rail, inner-tab row, drawer, bottom tabs) ───── */
 (function shell() {
   const app = $('#app');
-  const collapse = $('#sideCollapse');
+  const collapse = $('#sbCollapse') || $('#sideCollapse');
   if (collapse) collapse.addEventListener('click', () => {
     app.classList.toggle('side-min');
     try { localStorage.setItem('rc-side', app.classList.contains('side-min') ? 'min' : 'full'); } catch (e) {}
   });
+  /* restore the persisted rail state (reference: the collapse control is in the brand lockup) */
+  try { if (localStorage.getItem('rc-side') === 'min') app.classList.add('side-min'); } catch (e) {}
   const menu = $('#menuBtn');
   if (menu) menu.addEventListener('click', () => app.classList.toggle('side-open'));
   const scrim = $('#sideScrim');
@@ -202,15 +204,21 @@ setInterval(notifBadge, 60000);
   const setNav = $('#setNav');
   let savedG = null; try { savedG = localStorage.getItem('rc-setgroup'); } catch (e) {}
   if (setNav) {
-    /* Meridian 2: a tab may cover several set-groups (data-sets="ai,automation") */
+    /* Signal Desk §1.4: a tab may cover several set-groups (data-sets="whatsapp,ai").
+       The tab shows EVERY group it covers — the primary setgroup is only the
+       identity that gets remembered in localStorage. */
     const tabSets = (t) => (t.dataset.sets || t.dataset.setgroup || '').split(',').map((x) => x.trim()).filter(Boolean);
-    const activate = (g, click) => {
-      $$('.set-tab', setNav).forEach((x) => x.classList.toggle('on', tabSets(x).includes(g)));
-      $$('.set-group').forEach((x) => x.classList.toggle('on', x.dataset.setgroup === g));
-      if (click) { try { localStorage.setItem('rc-setgroup', g); } catch (e) {} }
+    const activate = (tab, click) => {
+      const sets = tabSets(tab);
+      $$('.set-tab', setNav).forEach((x) => x.classList.toggle('on', x === tab));
+      $$('.set-group').forEach((x) => x.classList.toggle('on', sets.includes(x.dataset.setgroup)));
+      if (click) { try { localStorage.setItem('rc-setgroup', tab.dataset.setgroup); } catch (e) {} }
     };
-    if (savedG && $$('.set-tab', setNav).some((x) => tabSets(x).includes(savedG))) activate(savedG, false);
-    setNav.addEventListener('click', (ev) => { const tab = ev.target.closest('.set-tab'); if (tab) activate(tab.dataset.setgroup, true); });
+    if (savedG) {
+      const t0 = $$('.set-tab', setNav).find((x) => tabSets(x).includes(savedG));
+      if (t0) activate(t0, false);
+    }
+    setNav.addEventListener('click', (ev) => { const tab = ev.target.closest('.set-tab'); if (tab) activate(tab, true); });
   }
 })();
 
@@ -243,6 +251,11 @@ const AREA = {
   analytics: 'insights', digest: 'insights', health: 'insights', logs: 'insights', audit: 'insights',
   email: 'system', settings: 'system', about: 'system'
 };
+/* Reference top-bar breadcrumb labels (one per group) */
+const GROUP_LABEL = {
+  command: 'COMMAND', broadcast: 'BROADCAST', channels: 'CHANNELS', people: 'PEOPLE',
+  studio: 'STUDIO', intelligence: 'INTELLIGENCE', insights: 'INSIGHTS', system: 'SYSTEM'
+};
 const loaders = {};
 let currentView = 'home';
 function show(view) {
@@ -256,6 +269,9 @@ function show(view) {
   $$('#sidebar .sb-group').forEach((g) => g.classList.toggle('on', g.dataset.group === area));
   $$('.bt').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
   $('#viewTitle').textContent = TITLES[view];
+  /* Reference top bar: breadcrumb = GROUP / Screen */
+  const cg = $('#crumbGroup');
+  if (cg) cg.textContent = (GROUP_LABEL[AREA[view] || 'command'] || 'COMMAND');
   $('#app').classList.remove('side-open');
   const content = $('#content');
   if (content) content.scrollTop = 0;
@@ -346,6 +362,10 @@ async function pollStatus() {
     const b = $('#waBadge');
     b.dataset.s = st.status;
     $('#waBadgeText').textContent = STATUS_TEXT[st.status] || st.status;
+    /* the badge now doubles as the connection pill's state — shown only when NOT linked */
+    b.hidden = st.status === 'open';
+    if (window.__sdConnState) window.__sdConnState(st.status);
+    if (window.__sdSideHealth) window.__sdSideHealth(st.status);
     const qrCard = $('#qrCard');
     if (st.status === 'qr') {
       qrCard.hidden = false;
@@ -358,6 +378,173 @@ async function pollStatus() {
   } catch (e) { /* badge retries next tick */ }
 }
 setInterval(pollStatus, 30000);
+
+/* ── 5b · SIGNAL DESK REFERENCE SHELL (presentation only — reuses live data) ──
+   Connection pill, paired-identity card, one-line sidebar health, the Home
+   greeting + activity chart + queue/health/pacing panels, theme radios,
+   sidebar collapse, and the data-goview deep links. No business logic here;
+   every value comes from the existing /api/* endpoints. */
+(function sdShell() {
+  const CONN_TXT = { open: 'Linked', qr: 'Scan QR', connecting: 'Connecting…', close: 'Offline' };
+  window.__sdConnState = (status) => {
+    const st = CONN_TXT[status] || status;
+    const el = $('#connState'); if (el) el.textContent = st;
+    const dot = $('#connDot'); if (dot) dot.dataset.s = status;
+    const pill = $('#connPill'); if (pill) pill.dataset.s = status;
+    /* sidebar paired-identity card mirrors the same state */
+    const t = $('#pairedTitle'), s = $('#pairedSub'), pd = $('#pairedDot');
+    if (t) t.textContent = status === 'open' ? 'WhatsApp linked' : 'WhatsApp';
+    if (s) s.textContent = status === 'open' ? 'Owner identity · Linked once' : 'Link from Home — one scan, never again';
+    if (pd) pd.dataset.s = status;
+  };
+  let __healthCache = null;
+  window.__sdSideHealth = async (status) => {
+    const dot = $('#sideHealthDot'); if (dot) dot.dataset.s = status;
+    /* pull the real 8-part score at most once a minute for the one-line readout */
+    if (Date.now() - (__healthCache && __healthCache.at || 0) < 60000 && __healthCache && __healthCache.val) { paint(__healthCache.val); return; }
+    try {
+      const h = await api('/api/health');
+      __healthCache = { at: Date.now(), val: h };
+      paint(h);
+    } catch (e) { /* keep last good readout */ }
+    function paint(h) {
+      const parts = (h && h.parts) || [];
+      const passed = parts.filter((p) => (p.score || 0) >= 80).length;
+      const score = (h && typeof h.score === 'number') ? h.score : (parts.length ? Math.round(parts.reduce((a, p) => a + (p.score || 0), 0) / parts.length) : 0);
+      const txt = $('#sideHealthTxt'), cnt = $('#sideHealthCount');
+      if (txt) txt.textContent = score >= 80 ? 'All systems healthy' : (score >= 50 ? 'Some checks degraded' : 'Attention needed');
+      if (cnt) cnt.textContent = `${passed}/${parts.length || 8}`;
+      const d2 = $('#sideHealthDot'); if (d2) d2.dataset.h = score >= 80 ? 'ok' : (score >= 50 ? 'warn' : 'err');
+    }
+  };
+  /* Home greeting by hour of day (owner name comes from the sidebar user row) */
+  function greet() {
+    const h = new Date().getHours();
+    const part = h < 5 ? 'Good night' : (h < 12 ? 'Good morning' : (h < 17 ? 'Good afternoon' : 'Good evening'));
+    const who = ($('#userName') && $('#userName').textContent) || 'Admin';
+    const el = $('#homeGreeting'); if (el) el.textContent = `${part}, ${who}.`;
+    const sub = $('#homeSub');
+    if (sub) sub.textContent = (window.__waStatus && window.__waStatus !== 'open')
+      ? 'Link WhatsApp to start mirroring — one scan, and it is never needed again.'
+      : 'Your broadcast desk is operating normally. Here is the signal across your channels.';
+  }
+  /* Home reference panels — real data from /api/overview, /api/queue, /api/health */
+  window.sdPaintHomePanels = async (ov) => {
+    try {
+      const [q, h] = await Promise.all([api('/api/queue').catch(() => null), api('/api/health').catch(() => null)]);
+      /* queue status */
+      const hq = $('#homeQueue');
+      if (hq) {
+        const pending = (q && q.pending && q.pending.length) || (ov && ov.queue && ov.queue.pending) || 0;
+        const delayed = (q && q.queued) || 0;
+        const approved = (q && q.approved && q.approved.length) || 0;
+        hq.innerHTML = `
+          <div class="queue-total"><strong>${pending}</strong><span>pending approval</span></div>
+          <div class="queue-metrics">
+            <div><i class="metric-dot amber-dot"></i><span>Pending</span><strong>${pending}</strong></div>
+            <div><i class="metric-dot blue-dot"></i><span>Delayed</span><strong>${delayed}</strong></div>
+            <div><i class="metric-dot green-dot"></i><span>Approved</span><strong>${approved}</strong></div>
+          </div>
+          <button class="btn btn-g full-width" data-goview="approvals">Review approvals →</button>`;
+      }
+      /* system health */
+      const hh = $('#homeHealth');
+      if (hh && h) {
+        const parts = (h.parts) || [];
+        const passed = parts.filter((p) => (p.score || 0) >= 80).length;
+        const score = (typeof h.score === 'number') ? h.score : 0;
+        const top = parts.slice(0, 4).map((p) => `<span><i data-s="${(p.score || 0) >= 80 ? 'ok' : 'warn'}"></i>${esc(p.name)}</span>`).join('');
+        hh.innerHTML = `
+          <div class="health-score-row">
+            <div class="health-ring" style="background:conic-gradient(var(--ok) 0 ${score}%,var(--surface3) ${score}% 100%)"><div><strong>${score}</strong><small>/100</small></div></div>
+            <div class="health-checks">${top}</div>
+          </div>
+          <div class="health-bottom"><span>${passed} of ${parts.length || 8} checks healthy</span><a class="text-link" href="#view=health" data-goview="health">Run self-test →</a></div>`;
+      }
+      /* adaptive pacing — paint into #homePaceBody, never #homePace (which owns the pinned #paceStrip) */
+      const hp = $('#homePaceBody');
+      if (hp) {
+        const pace = (ov && ov.pace) || {};
+        if (pace.active) {
+          const gap = Math.round((pace.gapMs || 0) / 1000);
+          hp.innerHTML = `
+            <div class="pacing-rate"><strong>${gap}</strong><span>s between sends</span><span class="trend" style="color:var(--warn)">Active</span></div>
+            <p class="panel-copy">Rate is being adjusted against ${esc(pace.reason || 'a recent failure spike')} — it clears itself after 20 quiet minutes.</p>
+            <div class="pacing-meter"><span style="width:${Math.min(100, 25 + gap)}%"></span></div>
+            <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>`;
+        } else {
+          hp.innerHTML = `
+            <div class="pacing-rate"><strong>0</strong><span>s added gap</span><span class="trend up">Stable</span></div>
+            <p class="panel-copy">No failure spike right now — posts flow at the normal rate. The controller adds a gap automatically after repeated failures.</p>
+            <div class="pacing-meter"><span style="width:0%"></span></div>
+            <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>`;
+        }
+      }
+    } catch (e) { /* panels keep their last good state */ }
+  };
+  /* Home activity chart — real hourly outcome counts for the last 24 h */
+  window.sdPaintHomeChart = async () => {
+    const host = $('#homeChartSvg'); if (!host) return;
+    let d; try { d = await api('/api/overview/hourly'); } catch (e) { return; }
+    const B = (d && d.buckets) || [], L = (d && d.labels) || [];
+    if (!B.length) return;
+    const max = Math.max(1, ...B.flatMap((b) => [b.published, b.skipped, b.failed]));
+    const W = 700, H = 210, TOP = 20, BOT = 188;
+    const x = (i) => Math.round((i / (B.length - 1)) * W);
+    const y = (v) => Math.round(BOT - (v / max) * (BOT - TOP));
+    const line = (key) => B.map((b, i) => `${i ? 'L' : 'M'}${x(i)} ${y(b[key] || 0)}`).join(' ');
+    const areaPub = `M0 ${BOT} ` + B.map((b, i) => `L${x(i)} ${y(b.published || 0)}`).join(' ') + ` L${W} ${BOT} Z`;
+    const grid = `M0 ${y(max)}H${W} M0 ${y(max * 2 / 3)}H${W} M0 ${y(max / 3)}H${W} M0 ${BOT}H${W}`;
+    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Post outcomes over the last 24 hours">
+      <defs><linearGradient id="sdArea" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".18"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+      <path class="gridline" d="${grid}"/>
+      <path class="area-published" d="${areaPub}" fill="url(#sdArea)"/>
+      <path class="line-published" d="${line('published')}"/>
+      <path class="line-skipped" d="${line('skipped')}"/>
+      <path class="line-failed" d="${line('failed')}"/>
+    </svg>`;
+    const cy = $('#homeChartY');
+    if (cy) cy.innerHTML = `<span>${max}</span><span>${Math.round(max * 2 / 3)}</span><span>${Math.round(max / 3)}</span><span>0</span>`;
+    const cx = $('#homeChartX');
+    if (cx) { const picks = [0, 4, 8, 12, 16, 20, B.length - 1]; cx.innerHTML = picks.map((i) => `<span>${L[i] || ''}</span>`).join(''); }
+    const tot = B.reduce((a, b) => a + (b.published || 0) + (b.skipped || 0) + (b.failed || 0), 0);
+    const foot = $('#homeChartFoot');
+    if (foot) foot.textContent = tot ? `${tot} post outcome(s) in the last 24 hours, Pakistan time.` : 'No post outcomes in the last 24 hours yet.';
+  };
+  /* deep links: any [data-goview] jumps to that screen (works on buttons + links) */
+  document.addEventListener('click', (e) => {
+    const g = e.target.closest('[data-goview]');
+    if (!g) return;
+    const view = g.dataset.goview;
+    const item = $$('.sb-item').find((a) => a.dataset.view === view);
+    if (item) item.click();
+  });
+  /* theme radios (Workspace & language) share the sidebar theme cycle */
+  function syncThemeRadios() {
+    const t = (function () { try { return localStorage.getItem('rc-theme') || 'dark'; } catch (e) { return 'dark'; } })();
+    $$('#themeRadios [data-theme-choice]').forEach((b) => b.classList.toggle('selected', b.dataset.themeChoice === t));
+  }
+  const tr = $('#themeRadios');
+  if (tr) {
+    syncThemeRadios();
+    tr.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-theme-choice]'); if (!b) return;
+      const next = b.dataset.themeChoice;
+      try { localStorage.setItem('rc-theme', next); } catch (err) {}
+      const applied = next === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : next;
+      document.documentElement.dataset.theme = applied;
+      syncThemeRadios();
+      setThemeIcon(next); /* refresh the sidebar glyph — same state the sidebar button uses */
+    });
+  }
+  /* sidebar collapse lives in the shell IIFE above (reuses the persisted rail state) */
+  /* greeting + first paint of the Home panels/chart (loaders.home refills on visit) */
+  greet();
+  setInterval(greet, 10 * 60 * 1000);
+  const bootOv = api('/api/overview').then((ov) => { window.sdPaintHomePanels(ov); }).catch(() => { });
+  bootOv.then(() => window.sdPaintHomeChart()).catch(() => { });
+})();
+
 
 /* SSE — live updates with auto-reconnect + backoff (R24) */
 (function sse() {
@@ -946,6 +1133,8 @@ loaders.home = async () => {
   $('#activityFeed').innerHTML = (logs.list || []).map((l) =>
     `<div class="tl-i"><span class="tl-ic" data-lv="${esc(l.level)}">${icoMap[l.level] || ''}</span><span class="tl-b"><b>${esc(l.code)}</b> — ${esc(l.msg)}</span><span class="tl-t">${when(l.ts)}</span></div>`).join('')
     || `<div class="tl-i"><span class="tl-b muted">No activity yet.</span></div>`;
+  /* Signal Desk reference panels — queue / health / pacing + 24 h activity chart */
+  if (window.sdPaintHomePanels) { window.sdPaintHomePanels(ov).catch(() => { }); window.sdPaintHomeChart().catch(() => { }); }
 };
 
 /* ── 11 · CHANNELS (sources / targets) ──────────────────────────── */
@@ -5117,7 +5306,8 @@ loaders.routing = async () => {
 
 /* J9 — About: version, changelog, last boot, storage */
 const CHANGELOG = [
-  ['v9.0.0 — Signal Desk (this build)', 'Full redesign from the delivered product spec + 8 mockups. Olive-black console (#10130F) on a four-step olive surface ladder · one citron accent (#D7F36A) · NO shadows anywhere (borders + surface steps only) · Noto Sans Arabic variable 400–700, self-hosted, one family for EN + UR. New eight-group IA (Command · Broadcast · Channels · People · Studio · Intelligence · Insights · System) — all 25 screens live in the sidebar, no inner-tab row · 64 px top bar · 248 px sidebar (72 px rail on tablet) · 1440 px canvas. Phone: 5-item bottom bar with the raised 56 px citron Compose. Spec component refresh: 42 px inputs, 40 px buttons, 42×24 switches, 112 px KPIs with a 3×24 citron rule, 22 px status pills, 56 px table rows, 160 ms switch motion. Read-only switch chips ("Label · Off ↗") on Home/Compose/History — state + deep link, never a second control. Light theme (#F4F6EF, accent #5E7C19) · Urdu RTL shell (inbox stays LTR) · WhatsApp mirror byte-identical · pipeline untouched · REPO-SLIM hotfix: media of ANY size is saved (the old 450 KB / 5 MB caps are gone) — and the media of any post is deleted right after it is published to the target channel, so nothing accumulates; WhatsApp-tab photos live on disk instead of inside the database (a 30-day safety net for unposted media, Settings → Storage), the cloud login syncs only when something actually changes (idle = zero GitHub writes), and one click "Compacts" the backup branch to a single snapshot so the GitHub repo stops growing'],
+  ['v9.1.0 — Reference layout (this build)', 'Full integration of the delivered reference design: top bar is now a breadcrumb (GROUP / Screen) with a live connection pill, labeled Panic stop and a wide Search anything field (Ctrl K). Sidebar: rotated R brand mark with the SIGNAL DESK sub-line, a one-line 8/8 health readout, the WhatsApp paired-identity card, the panic-stop status with the Esc key hint, and the workspace-owner row with inline help + theme controls. Home: COMMAND / OVERVIEW eyebrow, time-of-day greeting, LIVE badge, a real 24-hour activity chart (hourly published / skipped / failed, Pakistan time, new read-only /api/overview/hourly route), queue status, system health ring and adaptive pacing panels. Settings: exactly five sections in reference order — Workspace & language (bot name, language, theme as Dark / Light / System pills), Delivery controls, Integrations & reports, Security & sessions, Data & recovery; multi-group tabs now show every group they cover. All 25 screens, all 33 switches, the pipeline, WhatsApp pairing and settings persistence are unchanged'],
+  ['v9.0.0 — Signal Desk', 'Full redesign from the delivered product spec + 8 mockups. Olive-black console (#10130F) on a four-step olive surface ladder · one citron accent (#D7F36A) · NO shadows anywhere (borders + surface steps only) · Noto Sans Arabic variable 400–700, self-hosted, one family for EN + UR. New eight-group IA (Command · Broadcast · Channels · People · Studio · Intelligence · Insights · System) — all 25 screens live in the sidebar, no inner-tab row · 64 px top bar · 248 px sidebar (72 px rail on tablet) · 1440 px canvas. Phone: 5-item bottom bar with the raised 56 px citron Compose. Spec component refresh: 42 px inputs, 40 px buttons, 42×24 switches, 112 px KPIs with a 3×24 citron rule, 22 px status pills, 56 px table rows, 160 ms switch motion. Read-only switch chips ("Label · Off ↗") on Home/Compose/History — state + deep link, never a second control. Light theme (#F4F6EF, accent #5E7C19) · Urdu RTL shell (inbox stays LTR) · WhatsApp mirror byte-identical · pipeline untouched · REPO-SLIM hotfix: media of ANY size is saved (the old 450 KB / 5 MB caps are gone) — and the media of any post is deleted right after it is published to the target channel, so nothing accumulates; WhatsApp-tab photos live on disk instead of inside the database (a 30-day safety net for unposted media, Settings → Storage), the cloud login syncs only when something actually changes (idle = zero GitHub writes), and one click "Compacts" the backup branch to a single snapshot so the GitHub repo stops growing'],
   ['v8.5.0 — Graphite', 'The visual system, rebuilt from scratch: Geist typeface (self-hosted) · warm graphite surfaces · monochrome system with off-white primary actions · one warm accent, deployed scarcely · hairlines + inner top-edge light, no card shadows in dark · refined buttons, switches, tables, KPIs, command palette, modals, toasts · light theme with tint elevation · WhatsApp mirror untouched'],
   ['v8.4.0 — Meridian 2', 'One home per switch · Everyday/Power rail · Home, Channels, Publish, Inbox · 5-step setup wizard + 60-second tour · Calendar folded into Scheduled (List/Calendar) · Templates + media + cards → Library · Beautify → Rewrite in Compose + Brand screen · Reports and Digest · deep links + Recent + queue swipe · Meridian 2 palette, motion and type'],
   ['v8.3.0', 'GitHub repo storage gauge in Settings · Data · Storage (full-clone size, honest verdicts, 60 s cache)'],

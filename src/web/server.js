@@ -224,6 +224,27 @@ function build(app) {
       pace: require('../pace').status()                          // 5E (R74)
     });
   });
+  /* Signal Desk reference: the Home "Activity overview" chart — REAL hourly
+     outcome counts for the last 24 h (PKT time), one bucket per hour.
+     Additive read-only route; no schema or behavior change. */
+  api.get('/overview/hourly', (req, res) => {
+    try {
+      const d = require('../db').open();
+      const now = Date.now();
+      const since = new Date(now - 24 * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+      const buckets = new Array(24).fill(null).map(() => ({ published: 0, skipped: 0, failed: 0 }));
+      const rows = d.prepare(`SELECT created_at, status FROM posts WHERE created_at >= ?`).all(since);
+      for (const r of rows) {
+        const t = new Date(String(r.created_at).replace(' ', 'T') + 'Z').getTime();
+        const idx = 23 - Math.floor((now - t) / 3600e3); // 0 = oldest hour … 23 = current hour
+        if (idx < 0 || idx > 23) continue;
+        if (buckets[idx][r.status] !== undefined) buckets[idx][r.status] += 1;
+      }
+      /* hour labels in Pakistan time (UTC+5, no DST) for the bucket start */
+      const labels = buckets.map((b, i) => { const dt = new Date(now - (23 - i) * 3600e3 + 5 * 3600e3); return String(dt.getUTCHours()).padStart(2, '0') + ':00'; });
+      res.json({ ok: true, buckets, labels, total: rows.length });
+    } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
+  });
 
   /* ---- sources / targets / directory ---- */
   for (const [kind, add] of [['sources', (i, fast) => resolveAndAdd(i, 'sources', fast)], ['targets', (i, fast) => resolveAndAdd(i, 'targets', fast)]]) {

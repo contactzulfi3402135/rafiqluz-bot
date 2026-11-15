@@ -28,14 +28,23 @@ try {
 <body>
 <div class="app" id="app">
 
-  <!-- ═══ SIGNAL DESK RAIL (v9.0.0) ═══
+  <!-- ═══ SIGNAL DESK RAIL (v9.1.0) ═══
      Eight groups, 25 screens (product spec §1.3): Command · Broadcast ·
      Channels · People · Studio · Intelligence · Insights · System.
      Active screen = 3 px citron rail. Phone: drawer + 5-item bottom bar. -->
   <aside class="sidebar" id="sidebar" aria-label="Primary">
+    <!-- Signal Desk shell (reference): brand lockup — rotated R mark + name + SIGNAL DESK -->
     <div class="sb-head">
-      <span class="sb-logo" aria-hidden="true">R</span>
-      <span class="sb-name" id="brandName"><%= botName %></span>
+      <span class="sb-logo brand-mark" aria-hidden="true">R</span>
+      <span class="brand-copy">
+        <span class="sb-name" id="brandName"><%= botName %></span>
+        <span class="brand-sub">SIGNAL DESK</span>
+      </span>
+      <button class="icon-btn sb-collapse" id="sbCollapse" title="Collapse sidebar" aria-label="Collapse sidebar"><%- icon('menu','icon icon-sm') %></button>
+    </div>
+    <!-- Reference: one-line health state under the brand (full report: Insights · Health) -->
+    <div class="side-health" id="sideHealth" title="Eight operational checks — full report in Insights · Health">
+      <span class="health-dot" id="sideHealthDot"></span><span id="sideHealthTxt">Checking…</span><span class="health-count" id="sideHealthCount">—/8</span>
     </div>
     <nav class="sb-areas" aria-label="Areas">
       <!-- Signal Desk IA (product spec §1.3) — eight groups, 25 screens, nothing removed -->
@@ -89,33 +98,45 @@ try {
         <button class="sb-item" data-top="system" data-view="about" data-lbl="About" role="link" tabindex="0"><%- icon('info') %><span class="lbl">About</span></button>
       </div>
     </nav>
-    <div class="sb-foot">
-      <button class="icon-btn" id="sbHelpBtn" title="What does everything do? — one-line guide" aria-label="Help — what each switch does"><%- icon('help','icon icon-sm') %></button>
-      <button class="icon-btn" id="sbThemeBtn" title="Theme: dark / light / auto" aria-label="Toggle theme"></button>
-      <span class="sb-panic" id="sbPanicStatus" data-p="off" title="Panic stop status — the shield in the top bar pauses and resumes everything"><span class="dot"></span><span class="p-txt">Panic off</span></span>
+    <!-- Reference: paired-identity card · labeled panic stop · workspace owner row -->
+    <div class="sb-foot sidebar-bottom">
+      <div class="paired-card" id="pairedCard">
+        <span class="paired-indicator" id="pairedDot"></span>
+        <div><strong id="pairedTitle">WhatsApp</strong><small id="pairedSub">Link from Home — one scan, never again</small></div>
+      </div>
+      <button class="panic-sidebar" id="sbPanicStatus" data-p="off" title="Panic stop status — the shield in the top bar pauses and resumes everything (exact state is restored)"><span class="dot"></span><span class="p-txt">Panic stop</span><kbd>⎋</kbd></button>
+      <div class="user-row">
+        <span class="avatar" id="userAvatar">RA</span>
+        <div class="user-copy"><strong id="userName">Workspace owner</strong><small>Administrator</small></div>
+        <button class="icon-btn" id="helpBtn" title="What does everything do? — one-line guide" aria-label="Help — what each switch does"><%- icon('help','icon icon-sm') %></button>
+        <button class="icon-btn" id="themeBtn" title="Theme: dark / light / auto" aria-label="Toggle theme"></button>
+      </div>
     </div>
   </aside>
   <div class="sb-scrim" id="sideScrim"></div>
 
   <!-- ═══ MAIN ═══ -->
   <div class="main">
+    <!-- Reference top bar: breadcrumb · command search · top actions (connection pill, bell, panic) -->
     <header class="topbar">
       <button class="icon-btn menu-btn" id="menuBtn" title="Menu" aria-label="Menu"><%- icon('menu') %></button>
-      <h1 class="tb-title" id="viewTitle">Dashboard</h1>
-      <!-- Meridian 2 order (right→left): WhatsApp badge · panic shield · bell · help ? · theme. Search sits left of the cluster (⌘K). -->
-      <div class="tb-right">
-        <span class="wa-badge" id="waBadge" data-s=""><span class="dot"></span><span id="waBadgeText">…</span></span>
+      <div class="breadcrumb" id="breadcrumb">
+        <span id="crumbGroup">COMMAND</span><b>/</b><h1 class="tb-title" id="viewTitle">Dashboard</h1>
+      </div>
+      <div class="tb-right top-actions">
+        <span class="connection-pill" id="connPill" title="WhatsApp link state — routine deploys never ask for a new QR scan">
+          <span class="health-dot" id="connDot"></span><span id="connState">Checking…</span><span class="muted">·</span><strong id="connName"><%= botName %> Primary</strong>
+        </span>
+        <span class="wa-badge" id="waBadge" data-s="" hidden><span class="dot"></span><span id="waBadgeText"></span></span>
         <span class="ro-chip" id="roChip" hidden>READ-ONLY</span>
-        <button class="icon-btn panic-btn" id="panicBtn" title="Panic stop — pause everything instantly" aria-label="Panic stop">
-          <%- icon('shield','icon icon-sm') %>
-        </button>
-        <button class="icon-btn bell-btn" id="notifBtn" title="Notifications" aria-label="Notifications">
+        <button class="icon-btn bell-btn notification-button" id="notifBtn" title="Notifications" aria-label="Notifications">
           <%- icon('bell','icon icon-sm') %><span class="bell-badge" id="notifBadge" hidden>0</span>
         </button>
-        <button class="icon-btn help-btn" id="helpBtn" title="What does each switch do? — one-line guide" aria-label="Help — what each switch does">?</button>
-        <button class="icon-btn" id="themeBtn" title="Theme: dark / light / auto" aria-label="Toggle theme"></button>
-        <button class="pal-btn" id="palBtn" title="Search & jump" aria-label="Open command palette">
-          <%- icon('search','icon icon-xs') %><span class="lbl">Search</span><kbd>Ctrl K</kbd>
+        <button class="icon-btn panic-btn panic-top" id="panicBtn" title="Panic stop — pause everything instantly (exact state is restored)" aria-label="Panic stop">
+          <%- icon('shield','icon icon-sm') %><span class="panic-lbl">Panic stop</span>
+        </button>
+        <button class="pal-btn command-search" id="palBtn" title="Search & jump (Ctrl K)" aria-label="Open command palette">
+          <%- icon('search','icon icon-xs') %><span class="lbl">Search anything…</span><kbd>Ctrl K</kbd>
         </button>
       </div>
     </header>
@@ -143,14 +164,49 @@ try {
       <!-- ═══ OVERVIEW · DASHBOARD ═══ -->
       <section class="view" data-view="home">
         <div id="cloudNote"></div>
+        <!-- Reference home shell: eyebrow + greeting + live badge + New post -->
+        <div class="page-heading">
+          <div><div class="eyebrow">COMMAND / OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Your broadcast desk is operating normally. Here is the signal across your channels.</p></div>
+          <div class="heading-actions"><span class="live-badge"><i></i> LIVE · 24/7</span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
+        </div>
         <div class="card pausebar" id="pauseBar" data-hov>
           <div class="pb-t"><b id="pauseHead">Mirroring is running.</b><span class="muted" id="pauseSub">Every source → every target, automatically.</span></div>
           <button class="btn btn-d" id="pauseBtn"><%- icon('pause','icon icon-xs') %> <span>Pause all mirroring</span></button>
         </div>
-        <div class="kpis" id="kpiGrid"></div>
-        <div id="paceStrip" hidden></div>
+        <div class="kpis kpi-grid" id="kpiGrid"></div>
         <!-- Signal Desk §1.3: read-only automation chips — state only, deep-link to the owner -->
         <div class="rosw-row" id="homeSwitchChips" hidden></div>
+        <!-- Reference home grid: activity + queue + health + pacing + recent, all real data -->
+        <div class="home-grid">
+          <div class="home-col home-col-main">
+            <div class="card activity-panel">
+              <div class="card-h"><%- icon('chart','icon') %> Activity overview <span class="muted tiny">— post outcomes over the last 24 hours</span></div>
+              <div class="card-b">
+                <div class="chart-legend"><span><i class="legend-dot published"></i>Published</span><span><i class="legend-dot skipped"></i>Skipped</span><span><i class="legend-dot failed"></i>Failed</span></div>
+                <div class="activity-chart" id="homeChart"><div class="chart-y" id="homeChartY"></div><div class="home-chart-svg" id="homeChartSvg"></div><div class="chart-x" id="homeChartX"></div></div>
+                <div class="muted tiny" id="homeChartFoot" style="margin-top:8px"></div>
+              </div>
+            </div>
+            <div class="card recent-panel">
+              <div class="card-h"><%- icon('zap','icon') %> Recent activity <span class="muted tiny">— latest processing outcomes</span> <a class="text-link" href="#view=logs" data-goview="logs" style="margin-left:auto">Full history ↗</a></div>
+              <div class="card-b"><div class="tl" id="activityFeed"></div></div>
+            </div>
+          </div>
+          <div class="home-col home-col-side">
+            <div class="card queue-panel">
+              <div class="card-h"><%- icon('inbox','icon') %> Queue status <span class="muted tiny">— items that need attention</span></div>
+              <div class="card-b" id="homeQueue"></div>
+            </div>
+            <div class="card health-panel">
+              <div class="card-h"><%- icon('pulse','icon') %> System health <span class="muted tiny">— eight operational checks</span> <a class="text-link" href="#view=health" data-goview="health" style="margin-left:auto">Details ↗</a></div>
+              <div class="card-b" id="homeHealth"></div>
+            </div>
+            <div class="card pacing-panel">
+              <div class="card-h"><%- icon('gauge','icon') %> Adaptive pacing <span class="muted tiny">— delivery rate controller</span> <a class="text-link" href="#view=guardrails" data-goview="guardrails" style="margin-left:auto">Open control ↗</a></div>
+              <div class="card-b" id="homePace"><div id="paceStrip" hidden></div><div id="homePaceBody"></div></div>
+            </div>
+          </div>
+        </div>
         <div class="card qr-card" id="qrCard" hidden>
           <%- icon('chat','icon icon-xl') %>
           <h3>Link WhatsApp</h3>
@@ -168,10 +224,6 @@ try {
               <button class="btn btn-g btn-sm" id="setupReopen" hidden>Reopen setup</button>
             </div>
           </div>
-        </div>
-        <div class="card">
-          <div class="card-h"><%- icon('zap','icon') %> Recent activity</div>
-          <div class="card-b"><div class="tl" id="activityFeed"></div></div>
         </div>
       </section>
 
@@ -1292,13 +1344,14 @@ try {
       <section class="view" data-view="settings" hidden>
         <div class="ph"><div class="ph-l"><h2>Settings</h2><div class="ph-d">Everything the bot can be told — grouped, one section at a time. The WhatsApp mirror is always left exactly as WhatsApp renders it.</div></div></div>
         <div class="set-wrap">
-          <nav class="set-nav" id="setNav" aria-label="Settings sections">
-      <!-- Meridian 2: 5 settings sections (AI+Automation merged · Access+Session merged) -->
-      <button class="set-tab on" data-setgroup="general" role="tab" tabindex="0"><span class="lbl">General</span></button>
-      <button class="set-tab" data-setgroup="whatsapp" role="tab" tabindex="0"><span class="lbl">WhatsApp</span></button>
-      <button class="set-tab" data-setgroup="ai" data-sets="ai,automation" role="tab" tabindex="0"><span class="lbl">AI and Automation</span></button>
-      <button class="set-tab" data-setgroup="data" role="tab" tabindex="0"><span class="lbl">Data and Backup</span></button>
-      <button class="set-tab" data-setgroup="access" data-sets="access,session" role="tab" tabindex="0"><span class="lbl">Access and Session</span></button>
+          <!-- Signal Desk reference §1.4: five settings sections, exact names and order.
+               Each tab may cover several set-groups (data-sets). -->
+          <nav class="set-nav settings-rail" id="setNav" aria-label="Settings sections">
+      <button class="set-tab on" data-setgroup="general" role="tab" tabindex="0"><%- icon('globe','icon icon-sm') %><span class="lbl">Workspace &amp; language</span></button>
+      <button class="set-tab" data-setgroup="automation" role="tab" tabindex="0"><%- icon('gauge','icon icon-sm') %><span class="lbl">Delivery controls</span></button>
+      <button class="set-tab" data-setgroup="whatsapp" data-sets="whatsapp,ai" role="tab" tabindex="0"><%- icon('route','icon icon-sm') %><span class="lbl">Integrations &amp; reports</span></button>
+      <button class="set-tab" data-setgroup="access" data-sets="access,session" role="tab" tabindex="0"><%- icon('shield','icon icon-sm') %><span class="lbl">Security &amp; sessions</span></button>
+      <button class="set-tab" data-setgroup="data" role="tab" tabindex="0"><%- icon('database','icon icon-sm') %><span class="lbl">Data &amp; recovery</span></button>
           </nav>
           <div class="set-body" id="setBody">
 
@@ -1308,11 +1361,6 @@ try {
           <div class="card-b">
             <div class="row-form"><input class="in" id="setBotName" placeholder="Bot name (shown in the dashboard)"><button class="btn btn-p" id="setSave" style="flex:none">Save</button></div>
           </div>
-        </div>
-        <!-- Meridian 2: the post-shaping switches' one home (General) -->
-        <div class="card cat">
-          <div class="card-h"><%- icon('sliders','icon') %> Posting switches <span class="muted tiny">— how every post is cleaned and shaped · all off by default</span></div>
-          <div class="card-b"><div class="sw-grid" id="swGeneral"></div></div>
         </div>
         <div class="card cat">
           <div class="card-h"><%- icon('sliders','icon') %> Dashboard</div>
@@ -1333,13 +1381,15 @@ try {
               </select>
               <span class="muted tiny">Urdu flips the whole console to right-to-left — best effort, the WhatsApp mirror stays as WhatsApp renders it.</span>
             </div>
-          </div>
-        </div>
-        <div class="card cat">
-          <div class="card-h"><%- icon('mail','icon') %> Daily WhatsApp report</div>
-          <div class="card-b">
-            <div class="row-form"><input class="in" id="setReportPhone" placeholder="Your phone, e.g. 923001234567"><button class="btn btn-p" id="setReportSave" style="flex:none">Save</button></div>
-            <p class="muted tiny f-help" style="margin-top:8px">Sent at 21:00 Pakistan time — published / failed / skipped counts for the day.</p>
+            <!-- Reference §1.4: theme lives in Workspace & language (the sidebar icon keeps working too) -->
+            <div class="row-form" style="margin-top:12px">
+              <label>Theme</label>
+              <div class="radio-line" id="themeRadios">
+                <button type="button" class="radio-pill" data-theme-choice="dark">Dark</button>
+                <button type="button" class="radio-pill" data-theme-choice="light">Light</button>
+                <button type="button" class="radio-pill" data-theme-choice="auto">System</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1365,12 +1415,25 @@ try {
             <div class="tw" style="margin-top:10px"><table class="t" id="waCmdTable"><thead><tr><th class="mono">Command</th><th>What it does</th></tr></thead><tbody></tbody></table></div>
           </div>
         </div>
+        <!-- Reference §1.5: report time lives in Integrations & reports -->
+        <div class="card cat">
+          <div class="card-h"><%- icon('mail','icon') %> Daily WhatsApp report</div>
+          <div class="card-b">
+            <div class="row-form"><input class="in" id="setReportPhone" placeholder="Your phone, e.g. 923001234567"><button class="btn btn-p" id="setReportSave" style="flex:none">Save</button></div>
+            <p class="muted tiny f-help" style="margin-top:8px">Sent at 21:00 Pakistan time — published / failed / skipped counts for the day.</p>
+          </div>
+        </div>
       </div>
       <div class="set-group" data-setgroup="automation">
+        <!-- Reference §1.5: post-shaping + pipeline defaults belong to Delivery controls (switch homes unchanged — SWITCH_HOME #swGeneral) -->
+        <div class="card cat">
+          <div class="card-h"><%- icon('sliders','icon') %> Posting switches <span class="muted tiny">— how every post is cleaned and shaped · all off by default</span></div>
+          <div class="card-b"><div class="sw-grid" id="swGeneral"></div></div>
+        </div>
         <div class="card">
           <div class="card-h">Automation <%- icon('zap','icon') %> <span class="muted tiny">— the bot working for you, all off by default</span></div>
           <div class="card-b">
-            <p class="muted tiny f-help">The Auto-pilot switch itself lives in Automate · Pilot (one home); its daily limit and full log are below. The WhatsApp command channel lives in Settings · WhatsApp.</p>
+            <p class="muted tiny f-help">The Auto-pilot switch itself lives in Intelligence · AI Pilot (one home); its daily limit and full log are below. The WhatsApp command channel lives in Settings · Integrations &amp; reports.</p>
             <h3 style="margin-top:16px;font-size:var(--t14);font-weight:600">Auto-pilot</h3>
             <p class="muted tiny f-help">An hourly self-maintenance pass: it re-queues failed items, re-feeds failed posts and unsticks zombie queue rows. Hard caps — a daily action limit, it <b>never deletes anything</b> and never touches settings or keys, and the panic stop kills it instantly. Its full log is below the limit.</p>
             <div class="row-form wrap" style="margin-top:10px">

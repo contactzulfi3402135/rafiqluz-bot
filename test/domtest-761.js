@@ -2033,7 +2033,7 @@ const calls = [];
   /* ---------- 5J (J9) · About + changelog ---------- */
   d.querySelector('.sb-item[data-view="about"]').click();
   await sleep(500);
-  ok(d.querySelectorAll('#abChangelog .chg').length === 19, '5J: changelog lists every build (got ' + d.querySelectorAll('#abChangelog .chg').length + ')');
+  ok(d.querySelectorAll('#abChangelog .chg').length === 20, '5J: changelog lists every build (got ' + d.querySelectorAll('#abChangelog .chg').length + ')');
   ok(d.getElementById('abChangelog').textContent.includes('Meridian 2') && d.getElementById('abChangelog').textContent.includes('Phase R'), 'M2: changelog covers Meridian 2 back to Phase R, no banned phase labels on current builds');
   ok(d.getElementById('abUptime').textContent.includes('booted'), '5J: About shows boot/uptime state');
 
