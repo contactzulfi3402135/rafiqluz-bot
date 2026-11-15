@@ -1,12 +1,5 @@
 node_modules/
-sessions/
-data/
-logs/
-media/
-backups/
-.env
-*.sqlite
-*.sqlite-*
-.patch*.js
-gate8/
-tmp/
+data/db.json
+data/backups/
+*.log
+.DS_Store

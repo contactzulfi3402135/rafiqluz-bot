@@ -1,0 +1,48 @@
+<%# WHATSAPP — spec §7.10: command channel + locked read-only mirror (never themed, LTR) %>
+<div class="page-head">
+  <div>
+    <h2><%= t('wa.title') %></h2>
+    <div class="sub"><%= t('wa.sub') %></div>
+  </div>
+  <div class="acts">
+    <span class="pill-status" style="height:24px"><span class="dot" style="background:var(--success)"></span><%= t('wa.simulation') %></span>
+  </div>
+</div>
+
+<div class="wa-cards">
+  <div class="card" style="padding:var(--sp-5)">
+    <div class="card-h"><span class="card-t"><%= t('wa.commands') %></span></div>
+    <div class="small muted" style="margin-bottom:var(--sp-3)"><%= t('wa.commands_sub') %></div>
+    <div class="chips" style="margin-bottom:var(--sp-4)">
+      <% ['status', 'pause', 'resume', 'approve all', 'report', 'health'].forEach(function (c) { %>
+      <button class="cmd-chip" data-cmd="<%= c %>" type="button"><%= c %></button>
+      <% }) %>
+    </div>
+    <div class="cmd-zone">
+      <input class="input" id="wa-cmd" placeholder="<%= t('wa.cmd_ph') %>" maxlength="80">
+      <button class="btn btn-primary" id="wa-cmd-btn" type="button"><%= t('wa.send') %></button>
+    </div>
+    <div class="mirror-feed" id="wa-feed" style="margin-top:var(--sp-4)">
+      <% waMessages.slice(0, 6).reverse().forEach(function (m) { %>
+      <div class="mono-line"><span class="t"><%= timeAgo(m.at) %></span><%= m.dir === 'in' ? 'Owner → ' : '' %><%= m.text %></div>
+      <% }) %>
+    </div>
+    <div class="rowline" style="gap:var(--sp-3);margin-top:var(--sp-4)">
+      <button class="btn btn-secondary" id="wa-test" type="button"><svg class="ic"><use href="#i-send"/></svg><%= t('wa.test') %></button>
+      <button class="btn btn-secondary" id="wa-reconnect" type="button"><svg class="ic"><use href="#i-refresh"/></svg><%= t('wa.reconnect') %></button>
+    </div>
+  </div>
+
+  <div class="card" style="padding:var(--sp-5)">
+    <div class="card-h">
+      <span class="card-t"><%= t('wa.mirror') %></span>
+      <span class="htag" style="cursor:default" title="<%= t('wa.mirror_locked') %>"><svg class="ic ic-sm"><use href="#i-lock"/></svg><%= t('wa.mirror_locked') %></span>
+    </div>
+    <div class="mirror-feed" id="mirror-feed" dir="ltr" style="max-height:420px">
+      <% mirror.slice(0, 8).forEach(function (m) { %>
+      <div class="mono-line"><span class="t"><%= timeAgo(m.at) %></span><%= m.text %></div>
+      <% }) %>
+    </div>
+    <div class="small muted" style="margin-top:var(--sp-3)"><%= t('wa.mirror_note') %></div>
+  </div>
+</div>

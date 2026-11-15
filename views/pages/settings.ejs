@@ -1,0 +1,431 @@
+<%# SETTINGS — spec §8: 8 tabs, staged save, 33 options with owned sub-settings %>
+<%
+  const sw = settings.switches;
+  const p = settings.pacing;
+  const a = settings.automation;
+  const ai = settings.ai;
+  const n = settings.notifications;
+  const s = settings.storage;
+  const swCount = Object.values(sw).filter(Boolean).length;
+  const SET_TABS = ['general','whatsapp','pacing','automation','ai','notifications','storage','options'];
+  const PAGE_JUMP = { brand: '/brand', autoreplies: '/auto-replies', routing: '/routing' };
+%>
+<script>window.__SWITCHES = <%- JSON.stringify(sw) %>;</script>
+
+<div class="page-head">
+  <div>
+    <h2><%= t('settings.title') %></h2>
+    <div class="sub"><%= t('settings.sub') %></div>
+  </div>
+</div>
+
+<form id="set-form" onsubmit="return false">
+<div class="tabs" id="set-tabs" role="tablist">
+  <% SET_TABS.forEach(function (k, i) { %>
+  <button class="tab" role="tab" aria-selected="<%= i === 0 ? 'true' : 'false' %>" data-tab="<%= k %>"><%= t('settings.tab.' + k) %></button>
+  <% }) %>
+</div>
+
+<!-- ══ GENERAL ══ -->
+<section class="set-panel card" data-tab="general" style="padding:var(--sp-5)">
+  <div class="set-grid">
+    <div class="field"><label for="set-name"><%= t('setg.name') %></label><input class="input" id="set-name" value="<%= settings.name %>" maxlength="40"></div>
+    <div class="field"><label for="set-bot"><%= t('setg.bot') %></label><input class="input" id="set-bot" value="<%= settings.botName %>" maxlength="40"></div>
+    <div class="field"><label for="set-report"><%= t('setg.report') %></label><input class="input" type="time" id="set-report" value="<%= settings.reportTime %>"></div>
+    <div class="field"><label for="set-tz"><%= t('setg.tz') %></label>
+      <select class="select" id="set-tz">
+        <% ['Asia/Karachi','Asia/Lahore','UTC','Europe/London','Asia/Dubai','America/New_York'].forEach(function (tz) { %><option <%= settings.timezone === tz ? 'selected' : '' %>><%= tz %></option><% }) %>
+      </select>
+    </div>
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--border-1);margin:var(--sp-5) 0">
+
+  <div class="card-h" style="margin-bottom:var(--sp-3)"><span class="card-t"><%= t('setg.theme') %></span></div>
+  <div class="set-grid">
+    <div class="field">
+      <label><%= t('setg.theme') %></label>
+      <div class="seg" id="seg-theme" role="radiogroup">
+        <button type="button" data-theme="dark" aria-pressed="<%= settings.theme === 'dark' ? 'true' : 'false' %>"><%= t('setg.theme.dark') %></button>
+        <button type="button" data-theme="light" aria-pressed="<%= settings.theme === 'light' ? 'true' : 'false' %>"><%= t('setg.theme.light') %></button>
+      </div>
+    </div>
+    <div class="field">
+      <label><%= t('setg.lang') %></label>
+      <select class="select" id="set-lang">
+        <option value="en" <%= settings.language === 'en' ? 'selected' : '' %>>English</option>
+        <option value="ur" <%= settings.language === 'ur' ? 'selected' : '' %>>اردو</option>
+      </select>
+    </div>
+  </div>
+  <div class="field" style="margin-top:var(--sp-3)">
+    <label><%= t('setg.accent') %></label>
+    <div class="swatches" id="sw-accent">
+      <% [['emerald','#10B981'],['violet','#8B5CF6'],['blue','#3B82F6'],['amber','#F59E0B'],['rose','#F43F5E']].forEach(function (x) { %>
+      <span class="swatch" data-accent="<%= x[0] %>" role="button" tabindex="0" aria-pressed="<%= settings.accent === x[0] ? 'true' : 'false' %>" style="background:<%= x[1] %>" title="<%= t('setg.accent.' + x[0]) %>"></span>
+      <% }) %>
+    </div>
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--border-1);margin:var(--sp-5) 0">
+
+  <div class="owned" data-owner="pin_for_changes" id="f-pin">
+    <div class="rowline" style="gap:var(--sp-3);align-items:center;flex-wrap:wrap">
+      <div style="flex:1;min-width:200px">
+        <b style="font-size:14px"><%= t('setg.wa_pin') %></b>
+        <div class="small muted"><%= t('settings.pin_sub') %></div>
+      </div>
+      <button class="btn btn-secondary" id="set-pin" type="button"><svg class="ic"><use href="#i-lock"/></svg><%= t('settings.pin') %></button>
+      <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.pin_for_changes') }) %></span>
+    </div>
+  </div>
+
+  <div class="owned" data-owner="brand_footer" id="f-footer" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:460px">
+      <label for="br-footer-s"><%= t('brand.footer') %></label>
+      <input class="input mono" id="br-footer-s" value="<%= brand.footer %>" maxlength="120">
+    </div>
+    <div class="small muted"><%= t('brand.footer_prev') %></div>
+    <div class="bubble" id="br-foot-prev-s" style="margin-top:6px;font-size:13px"><%= brand.footer %></div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.brand_footer') }) %></span>
+  </div>
+
+  <button class="switches-bar" id="sw-bar" type="button" aria-expanded="false">
+    <svg class="ic"><use href="#i-sliders"/></svg>
+    <span><%= t('setg.switches_bar') %></span>
+    <span class="cnt num" id="sw-count"><%= t('setg.switches_count', { n: swCount }) %></span>
+    <svg class="ic chev"><use href="#i-chevronDown"/></svg>
+  </button>
+</section>
+
+<!-- ══ WHATSAPP ══ -->
+<section class="set-panel card" data-tab="whatsapp" hidden style="padding:var(--sp-5)">
+  <div class="set-grid">
+    <div class="field"><label for="set-wa"><%= t('setw.owner') %></label><input class="input mono" id="set-wa" value="<%= settings.waOwner %>" placeholder="+92 3xx xxxxxxx"></div>
+    <div class="field"><label for="set-ch"><%= t('setw.channel') %></label><input class="input" id="set-ch" value="<%= settings.channelName %>" maxlength="40"></div>
+  </div>
+  <div class="field" style="margin-top:var(--sp-4)">
+    <label><%= t('setw.commands') %></label>
+    <div class="chips" id="set-commands">
+      <% ['status','pause','resume','approve all','report','health'].forEach(function (c) { %>
+      <button type="button" class="cmd-chip<%= settings.allowedCommands.includes(c) ? ' on' : '' %>" data-cmd="<%= c %>"><%= c %></button>
+      <% }) %>
+    </div>
+  </div>
+  <div class="rowline" style="gap:var(--sp-3);margin-top:var(--sp-5);align-items:center">
+    <span class="small muted"><%= t('setw.mirror') %> — <b style="color:var(--text-2)"><%= t('setw.mirror_locked') %></b></span>
+    <span class="grow"></span>
+    <button class="btn btn-secondary" id="wa-test-s" type="button"><svg class="ic"><use href="#i-send"/></svg><%= t('setw.test') %></button>
+  </div>
+  <div class="banner" style="margin-top:var(--sp-5);background:var(--surface-2)"><svg class="ic"><use href="#i-info"/></svg><span class="small"><%= t('setg.sim_note') %></span></div>
+</section>
+
+<!-- ══ PACING ══ -->
+<section class="set-panel card" data-tab="pacing" hidden style="padding:var(--sp-5)">
+  <div class="toggle-row">
+    <div><b style="font-size:14px"><%= t('setp.adaptive') %></b><div class="small muted"><%= t('setp.adaptive_sub') %></div></div>
+    <span class="tog" id="p-adapter" role="switch" tabindex="0" aria-checked="<%= p.adaptive ? 'true' : 'false' %>" aria-label="<%= t('setp.adaptive') %>"></span>
+  </div>
+  <div class="set-grid" style="margin-top:var(--sp-4)">
+    <div class="field"><label for="p-speed"><%= t('setp.speed') %></label>
+      <select class="select" id="p-speed">
+        <% ['slow','normal','fast','custom'].forEach(function (x) { %><option value="<%= x %>" <%= p.speed.toLowerCase() === x ? 'selected' : '' %>><%= t('setp.speed.' + x) %></option><% }) %>
+      </select>
+    </div>
+    <div class="field"><label for="p-per"><%= t('setp.permin') %></label><input class="input" type="number" min="1" max="20" id="p-per" value="<%= p.maxPerMin %>"></div>
+    <div class="field"><label for="p-min"><%= t('setp.min') %></label><input class="input" type="number" min="1" max="300" id="p-min" value="<%= p.minDelay %>"></div>
+    <div class="field"><label for="p-max"><%= t('setp.max') %></label><input class="input" type="number" min="2" max="600" id="p-max" value="<%= p.maxDelay %>"></div>
+    <div class="field set-full"><label for="p-cap"><%= t('setp.cap') %></label><input class="input" type="number" min="50" max="20000" step="50" id="p-cap" value="<%= p.dailyCap %>"></div>
+  </div>
+
+  <div class="owned" data-owner="quiet_hours" id="f-quiet" style="margin-top:var(--sp-4)">
+    <div class="set-grid">
+      <div class="field"><label for="p-qfrom"><%= t('setp.quiet') %> — <%= t('setp.from') %></label><input class="input" type="time" id="p-qfrom" value="<%= p.quietFrom %>"></div>
+      <div class="field"><label for="p-qto"><%= t('setp.to') %></label><input class="input" type="time" id="p-qto" value="<%= p.quietTo %>"></div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.quiet_hours') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="best_time" id="f-bestTime" style="margin-top:var(--sp-4)">
+    <div class="field">
+      <label><%= t('setp.best') %></label>
+      <div class="tagbox" id="p-best" style="cursor:default">
+        <% p.bestTime.forEach(function (w) { %><span class="htag mono" style="cursor:default"><%= w %></span><% }) %>
+      </div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.best_time') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="random_jitter" id="f-jitter" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:240px"><label for="p-jitter"><%= t('setp.jitter') %></label><input class="input" type="number" min="0" max="80" id="p-jitter" value="<%= p.jitter %>"></div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.random_jitter') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="weekend_pause" id="f-weekend" style="margin-top:var(--sp-4)">
+    <div class="set-grid">
+      <label class="chk-row2"><span class="tog" id="p-sat" role="switch" tabindex="0" aria-checked="<%= p.weekendSat ? 'true' : 'false' %>" aria-label="<%= t('setp.sat') %>"></span><span><%= t('setp.weekend') %> — <%= t('setp.sat') %></span></label>
+      <label class="chk-row2"><span class="tog" id="p-sun" role="switch" tabindex="0" aria-checked="<%= p.weekendSun ? 'true' : 'false' %>" aria-label="<%= t('setp.sun') %>"></span><span><%= t('setp.weekend') %> — <%= t('setp.sun') %></span></label>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.weekend_pause') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="burst_guard" id="f-burst" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:240px"><label for="p-burst"><%= t('setp.burst') %></label><input class="input" type="number" min="1" max="50" id="p-burst" value="<%= p.burst %>"></div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.burst_guard') }) %></span>
+  </div>
+</section>
+
+<!-- ══ AUTOMATION ══ -->
+<section class="set-panel card" data-tab="automation" hidden style="padding:var(--sp-5)">
+  <div class="set-grid">
+    <div class="field"><label for="a-approval"><%= t('seta.approval') %></label>
+      <select class="select" id="a-approval">
+        <option value="manual" <%= a.approval === 'manual' ? 'selected' : '' %>><%= t('seta.approval.manual') %></option>
+        <option value="trusted" <%= a.approval === 'trusted' ? 'selected' : '' %>><%= t('seta.approval.trusted') %></option>
+        <option value="auto" <%= a.approval === 'auto' ? 'selected' : '' %>><%= t('seta.approval.auto') %></option>
+      </select>
+    </div>
+    <div class="field"><label for="a-bulk"><%= t('seta.bulk') %> (min)</label><input class="input" type="number" min="1" max="1440" id="a-bulk" value="<%= a.bulkDelay %>"></div>
+    <div class="field"><label for="a-retries"><%= t('seta.retries') %></label><input class="input" type="number" min="0" max="10" id="a-retries" value="<%= a.retries %>"></div>
+    <div class="field"><label for="a-backoff"><%= t('seta.backoff') %></label>
+      <select class="select" id="a-backoff">
+        <% ['30s','1m','2m','5m'].forEach(function (b) { %><option <%= a.backoff === b ? 'selected' : '' %>><%= b %></option><% }) %>
+      </select>
+    </div>
+  </div>
+
+  <div class="owned" data-owner="max_post_age" id="f-maxPostAge" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:240px"><label for="a-age"><%= t('seta.age') %></label><input class="input" type="number" min="1" max="168" id="a-age" value="<%= a.maxPostAge %>"></div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.max_post_age') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="auto_translate" id="f-translateTo" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:240px"><label for="a-trans"><%= t('seta.translate') %></label>
+      <select class="select" id="a-trans">
+        <option value="none" <%= a.translateTo === 'none' ? 'selected' : '' %>><%= t('seta.trans.none') %></option>
+        <option value="ur" <%= a.translateTo === 'ur' ? 'selected' : '' %>><%= t('seta.trans.ur') %></option>
+        <option value="en" <%= a.translateTo === 'en' ? 'selected' : '' %>><%= t('seta.trans.en') %></option>
+      </select>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.auto_translate') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="link_shortener" id="f-shortenerDomain" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:280px"><label for="a-short"><%= t('seta.shortener') %></label><input class="input mono" id="a-short" value="<%= a.shortenerDomain %>" placeholder="rak.to"></div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.link_shortener') }) %></span>
+  </div>
+</section>
+
+<!-- ══ AI & RULES ══ -->
+<section class="set-panel card" data-tab="ai" hidden style="padding:var(--sp-5)">
+  <div class="owned" data-owner="ai_pilot_suggest" id="f-pilotMode">
+    <div class="field" style="max-width:360px">
+      <label><%= t('setai.mode') %></label>
+      <div class="seg" id="seg-pilot" role="radiogroup">
+        <% ['off','suggest','auto'].forEach(function (m) { %>
+        <button type="button" data-mode="<%= m %>" aria-pressed="<%= ai.pilotMode === m ? 'true' : 'false' %>"><%= t('setai.mode.' + m) %></button>
+        <% }) %>
+      </div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.ai_pilot_suggest') }) %></span>
+  </div>
+
+  <div class="field" style="margin-top:var(--sp-4)">
+    <label><%= t('setai.minlen') %></label>
+    <input class="input" type="number" min="0" max="2000" style="max-width:180px" id="ai-minlen" value="<%= ai.minTextLength %>">
+  </div>
+
+  <div class="owned" data-owner="blocklist" id="f-blocklist" style="margin-top:var(--sp-4)">
+    <div class="field"><label><%= t('setai.block') %></label>
+      <div class="tagbox" id="ai-block">
+        <% (ai.blocklist || []).forEach(function (b) { %><span class="htag"><%= b %><span class="x" role="button" aria-label="remove">✕</span></span><% }) %>
+        <input placeholder="<%= t('setai.tag_ph') %>" aria-label="<%= t('setai.block') %>">
+      </div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.blocklist') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="allowlist_only" id="f-allowlist" style="margin-top:var(--sp-4)">
+    <div class="field"><label><%= t('setai.allow') %></label>
+      <div class="tagbox" id="ai-allow">
+        <% (ai.allowlist || []).forEach(function (b) { %><span class="htag"><%= b %><span class="x" role="button" aria-label="remove">✕</span></span><% }) %>
+        <input placeholder="<%= t('setai.tag_ph') %>" aria-label="<%= t('setai.allow') %>">
+      </div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.allowlist_only') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="flag_keywords" id="f-flagKeywords" style="margin-top:var(--sp-4)">
+    <div class="field"><label><%= t('setai.flag') %></label>
+      <div class="tagbox" id="ai-flag">
+        <% (ai.flagKeywords || []).forEach(function (b) { %><span class="htag"><%= b %><span class="x" role="button" aria-label="remove">✕</span></span><% }) %>
+        <input placeholder="<%= t('setai.tag_ph') %>" aria-label="<%= t('setai.flag') %>">
+      </div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.flag_keywords') }) %></span>
+  </div>
+</section>
+
+<!-- ══ NOTIFICATIONS ══ -->
+<section class="set-panel card" data-tab="notifications" hidden style="padding:var(--sp-5)">
+  <div class="toggle-row"><div><b style="font-size:14px"><%= t('setn.dash') %></b></div><span class="tog on" role="switch" aria-checked="true" tabindex="-1" style="pointer-events:none"></span></div>
+  <div class="toggle-row"><div><b style="font-size:14px"><%= t('setn.mirror') %></b></div><span class="tog on" role="switch" aria-checked="true" tabindex="-1" style="pointer-events:none"></span></div>
+
+  <div class="card-h" style="margin:var(--sp-4) 0 var(--sp-2)"><span class="card-t"><%= t('setn.events') %></span></div>
+
+  <div class="owned" data-owner="daily_report" id="f-reportTime">
+    <div class="toggle-row"><div><b style="font-size:14px"><%= t('setn.daily') %></b><div class="small muted"><%= t('setn.daily_sub') %></div></div><span class="tog" data-key="daily_report" role="switch" tabindex="0" aria-checked="<%= sw.daily_report ? 'true' : 'false' %>"></span></div>
+  </div>
+
+  <div class="toggle-row"><div><b style="font-size:14px"><%= t('setn.fail') %></b></div><span class="tog" data-key="notify_failure" role="switch" tabindex="0" aria-checked="<%= sw.notify_failure ? 'true' : 'false' %>"></span></div>
+
+  <div class="owned" data-owner="notify_pending" id="f-pendingThreshold" style="margin-top:var(--sp-3)">
+    <div class="rowline" style="gap:var(--sp-3);align-items:center;flex-wrap:wrap">
+      <b style="font-size:14px"><%= t('setn.pending') %></b>
+      <span class="tog" data-key="notify_pending" role="switch" tabindex="0" aria-checked="<%= sw.notify_pending ? 'true' : 'false' %>"></span>
+      <span class="small muted" style="opacity:.9"><%= t('setn.pending_f', { n: n.pendingThreshold }) %></span>
+      <input class="input" type="number" min="1" max="100" id="n-pend" value="<%= n.pendingThreshold %>" style="width:90px">
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.notify_pending') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="health_alert" id="f-healthThreshold" style="margin-top:var(--sp-3)">
+    <div class="rowline" style="gap:var(--sp-3);align-items:center;flex-wrap:wrap">
+      <b style="font-size:14px"><%= t('setn.health') %></b>
+      <span class="tog" data-key="health_alert" role="switch" tabindex="0" aria-checked="<%= sw.health_alert ? 'true' : 'false' %>"></span>
+      <span class="small muted"><%= t('setn.health_f', { n: n.healthThreshold }) %></span>
+      <input class="input" type="number" min="1" max="100" id="n-health" value="<%= n.healthThreshold %>" style="width:90px">
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.health_alert') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="weekly_digest" id="f-digestDay" style="margin-top:var(--sp-3)">
+    <div class="rowline" style="gap:var(--sp-3);align-items:center;flex-wrap:wrap">
+      <b style="font-size:14px"><%= t('setn.digest') %></b>
+      <span class="tog" data-key="weekly_digest" role="switch" tabindex="0" aria-checked="<%= sw.weekly_digest ? 'true' : 'false' %>"></span>
+      <select class="select" id="n-day" style="width:auto" aria-label="<%= t('setn.digest_day') %>">
+        <% ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].forEach(function (d) { %><option <%= n.digestDay === d ? 'selected' : '' %>><%= t('day.' + d).charAt(0).toUpperCase() + t('day.' + d).slice(1) %></option><% }) %>
+      </select>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.weekly_digest') }) %></span>
+  </div>
+
+  <div style="margin-top:var(--sp-5)">
+    <button class="btn btn-secondary" id="nt-test" type="button"><svg class="ic"><use href="#i-bell"/></svg><%= t('setn.test') %></button>
+  </div>
+</section>
+
+<!-- ══ STORAGE ══ -->
+<section class="set-panel card" data-tab="storage" hidden style="padding:var(--sp-5)">
+  <div class="field" style="max-width:480px">
+    <label><%= t('sets.usage') %></label>
+    <div class="bar lg" style="margin-top:6px"><i style="width:62%"></i></div>
+    <div class="small muted num" style="margin-top:4px"><%= t('sets.usage_val', { u: '3.1 GB', t: '5 GB' }) %></div>
+  </div>
+
+  <div class="set-grid" style="margin-top:var(--sp-4)">
+    <div class="field"><label for="st-logret"><%= t('sets.logret') %></label><input class="input" type="number" min="1" max="365" id="st-logret" value="<%= s.logRetention %>"></div>
+    <div class="owned field" data-owner="extended_audit" id="f-auditRetention">
+      <label for="st-auditret"><%= t('sets.auditret') %></label>
+      <input class="input" type="number" min="7" max="3650" id="st-auditret" value="<%= s.auditRetention %>">
+      <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.extended_audit') }) %></span>
+    </div>
+  </div>
+
+  <div class="owned" data-owner="auto_backup" id="f-backupFreq" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:240px"><label for="st-freq"><%= t('sets.backup_freq') %></label>
+      <select class="select" id="st-freq">
+        <% ['off','daily','weekly','monthly'].forEach(function (f) { %><option <%= s.backupFreq === f ? 'selected' : '' %>><%= t('sets.freq.' + f) %></option><% }) %>
+      </select>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.auto_backup') }) %></span>
+  </div>
+
+  <div class="owned" data-owner="cloud_sync" id="f-cloudProvider" style="margin-top:var(--sp-4)">
+    <div class="field" style="max-width:280px"><label for="st-cloud"><%= t('sets.cloud') %></label>
+      <select class="select" id="st-cloud">
+        <% ['none','gdrive','s3'].forEach(function (c) { %><option <%= s.cloudProvider === c ? 'selected' : '' %>><%= c === 'none' ? t('sets.cloud_none') : (c === 'gdrive' ? 'Google Drive' : 'S3') %></option><% }) %>
+      </select>
+    </div>
+    <div id="st-cloud-creds" style="display:none" class="set-grid">
+      <div class="field"><label><%= t('sets.cloud_creds') %></label><input class="input mono" type="password" placeholder="••••••••"></div>
+      <div class="field"><label>Region</label><input class="input mono" value="ap-south-1" disabled></div>
+    </div>
+    <span class="off-hint small muted" style="display:none"><%= t('sets.owned_hint', { x: t('opt.cloud_sync') }) %></span>
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--border-1);margin:var(--sp-5) 0">
+
+  <div class="rowline" style="gap:var(--sp-3);flex-wrap:wrap">
+    <button class="btn btn-secondary" id="st-backup" type="button"><svg class="ic"><use href="#i-download"/></svg><%= t('sets.backup_now') %></button>
+    <button class="btn btn-secondary" id="st-export" type="button"><svg class="ic"><use href="#i-fileText"/></svg><%= t('common.export') %></button>
+    <label class="btn btn-secondary" style="cursor:pointer"><svg class="ic"><use href="#i-upload"/></svg><%= t('sets.restore') %><input type="file" id="st-restore-file" accept=".json,application/json" hidden></label>
+  </div>
+  <div class="small muted" style="margin-top:var(--sp-2)"><%= t('sets.restore_note') %></div>
+</section>
+
+<!-- ══ 33 OPTIONS ══ -->
+<section class="set-panel card" data-tab="options" hidden style="padding:var(--sp-5)">
+  <div class="rowline" style="gap:var(--sp-3);align-items:center;flex-wrap:wrap;margin-bottom:var(--sp-4)">
+    <div style="position:relative;flex:1;min-width:200px">
+      <input class="input" id="opts-q" placeholder="<%= t('opts.search_ph') %>" style="padding-inline-start:40px">
+      <svg class="ic" style="position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--text-3)"><use href="#i-search"/></svg>
+    </div>
+    <span class="small muted num" id="opts-count"><%= t('opts.counter', { n: swCount }) %></span>
+    <button class="btn btn-secondary" id="opts-reset" type="button"><%= t('opts.reset') %></button>
+  </div>
+
+  <div id="opts-list" style="display:flex;flex-direction:column;gap:var(--sp-5)">
+    <% groups.forEach(function (g) { %>
+    <div class="opt-group" data-group="<%= g.key %>">
+      <div class="menu-head" style="padding:0 0 var(--sp-2)"><%= t('opts.' + g.key) %></div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <% options.filter(function (o) { return o.g === g.key; }).forEach(function (o) { %>
+        <div class="opt-row" data-key="<%= o.key %>" data-search="<%= (t('opt.' + o.key) + ' ' + t('opt.' + o.key + '.d')).toLowerCase() %>">
+          <div class="rowline" style="gap:var(--sp-3);align-items:center">
+            <div style="flex:1;min-width:0">
+              <b style="font-size:14px"><%= t('opt.' + o.key) %></b>
+              <div class="small muted"><%= t('opt.' + o.key + '.d') %></div>
+            </div>
+            <% if (o.owns) { %>
+              <% if (PAGE_JUMP[o.owns.tab]) { %>
+              <a class="opt-conf" href="<%= PAGE_JUMP[o.owns.tab] %>" data-field="<%= o.owns.field %>"><%= t('common.configure') %></a>
+              <% } else { %>
+              <button class="opt-conf" type="button" data-field="<%= o.owns.field %>"><%= t('common.configure') %></button>
+              <% } %>
+            <% } %>
+            <span class="tog" data-key="<%= o.key %>" role="switch" tabindex="0" aria-checked="<%= sw[o.key] ? 'true' : 'false' %>" aria-label="<%= t('opt.' + o.key) %>"></span>
+          </div>
+        </div>
+        <% }) %>
+      </div>
+    </div>
+    <% }) %>
+  </div>
+</section>
+</form>
+
+<div class="set-savebar">
+  <span class="small muted" id="set-unsaved-note" style="display:none"><%= t('settings.unsaved') %></span>
+  <span class="grow"></span>
+  <button class="btn btn-secondary" type="button" onclick="location.reload()"><%= t('common.cancel') %></button>
+  <button class="btn btn-primary save-btn" id="set-save" type="button" disabled><span class="unsaved-dot"></span><%= t('common.save') %></button>
+</div>
+
+<style>
+.set-savebar {
+  display: none;
+  position: sticky; bottom: 0;
+  background: var(--surface-1);
+  border-top: 1px solid var(--border-1);
+  padding: var(--sp-3) var(--grid-gap);
+  gap: var(--sp-3);
+  align-items: center;
+  margin-top: var(--sp-5);
+}
+@media (max-width: 767.98px) {
+  .set-savebar { display: flex; }
+  .set-savebar .btn { min-height: 44px; }
+}
+.opts-search-wrap { width: 100%; }
+</style>

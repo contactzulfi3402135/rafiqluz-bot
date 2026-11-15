@@ -1,0 +1,42 @@
+<%# LIBRARY — spec §7.8: templates / media / snippets, "Use" → compose prefill %>
+<% const ago = (ts) => { const m = Math.max(1, Math.round((Date.now() - ts) / 60000)); if (m < 60) return m + 'm'; const h = Math.round(m / 60); if (h < 24) return h + 'h'; return Math.round(h / 24) + 'd'; }; %>
+<script>window.__LIBRARY = <%- JSON.stringify(library) %>;</script>
+
+<div class="page-head">
+  <div>
+    <h2><%= t('library.title') %></h2>
+    <div class="sub"><%= t('library.sub') %></div>
+  </div>
+  <div class="acts">
+    <button class="btn btn-primary" id="lib-new" type="button"><svg class="ic"><use href="#i-plus"/></svg><%= t('library.new') %></button>
+  </div>
+</div>
+
+<div class="card" style="padding:0;margin-bottom:var(--grid-gap)">
+  <div class="tabs" id="lib-tabs" role="tablist" style="padding:0 20px">
+    <button class="tab" role="tab" aria-selected="true" data-filter="template"><%= t('library.tab.templates') %> (<span class="num"><%= counts.template %></span>)</button>
+    <button class="tab" role="tab" aria-selected="false" data-filter="media"><%= t('library.tab.media') %> (<span class="num"><%= counts.media %></span>)</button>
+    <button class="tab" role="tab" aria-selected="false" data-filter="snippet"><%= t('library.tab.snippets') %> (<span class="num"><%= counts.snippet %></span>)</button>
+  </div>
+</div>
+
+<div class="disc-grid" id="lib-grid">
+  <% library.forEach(function (l, i) { %>
+  <div class="lib-card disc-card" data-id="<%= l.id %>" data-kind="<%= l.kind %>" data-name="<%= l.name %>">
+    <div class="rowline" style="gap:12px">
+      <span class="thumb thumb-<%= l.motif || 'text' %>" style="width:44px;height:44px;border-radius:10px;flex:none"><svg class="ic"><use href="#i-<%= { city: 'building', laptop: 'laptop', plant: 'leaf', chart: 'chart', chat: 'messageSquare', skyline: 'building' }[l.motif] || (l.kind === 'media' ? 'image' : 'fileText') %>"/></svg></span>
+      <div style="flex:1;min-width:0">
+        <div class="src-name" style="font-size:15px"><%= l.name %></div>
+        <div class="src-sub"><%= t('library.kind.' + l.kind) %> · <%= ago(l.created) %></div>
+      </div>
+      <button class="ibtn" data-act="menu" type="button" aria-label="menu"><svg class="ic"><use href="#i-more"/></svg></button>
+    </div>
+    <% if (l.kind !== 'media') { %>
+    <div class="small muted" style="font-family:var(--font-mono);direction:ltr;text-align:left;max-height:52px;overflow:hidden;white-space:pre-wrap;background:var(--surface-2);border-radius:var(--r-s);padding:8px 10px"><%= (l.content || '').slice(0, 90) %></div>
+    <% } %>
+    <div class="foot">
+      <button class="btn btn-primary" data-act="use" type="button"><svg class="ic"><use href="#i-arrowRight"/></svg><%= t('library.use') %></button>
+    </div>
+  </div>
+  <% }) %>
+</div>

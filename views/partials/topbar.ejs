@@ -1,0 +1,92 @@
+<%# Top bar (spec §3.3) — sticky, 64px %>
+<header class="topbar">
+  <button class="tb-btn m-hamb" id="hamb" type="button" aria-label="<%= t('nav.home') %> menu">
+    <svg class="ic"><use href="#i-menu"/></svg>
+  </button>
+  <% if (page === 'home') { %>
+  <span class="brand-mark m-brand" style="width:28px;height:28px" aria-hidden="true"><svg class="ic" style="width:17px;height:17px"><use href="#i-leaf"/></svg></span>
+  <span class="m-title"><%= t('app.name') %></span>
+  <% } else { %>
+  <span class="m-title"><%= t('nav.' + navKey) %></span>
+  <% } %>
+
+  <div style="position:relative">
+    <button class="status-chip <%= paused ? 'paused' : (healthState==='ok' ? '' : healthState) %>" id="status-chip" type="button" aria-haspopup="true" aria-expanded="false">
+      <span class="dot"></span>
+      <span id="status-chip-txt"><%= paused ? t('topbar.status_paused') : (healthState==='ok' ? t('topbar.status_ok') : healthState==='warn' ? t('topbar.status_warn') : t('topbar.status_err')) %></span>
+      <svg class="ic ic-sm"><use href="#i-chevDown"/></svg>
+    </button>
+    <div class="menu" id="status-menu" hidden>
+      <div class="menu-head">
+        <span id="status-menu-head"><%= paused ? t('topbar.status_paused') : (healthState==='ok' ? t('topbar.status_ok') : healthState==='warn' ? t('topbar.status_warn') : t('topbar.status_err')) %></span>
+        <a class="card-link" href="/health"><%= t('topbar.open_health') %></a>
+      </div>
+      <% healthChecks.forEach(function (c) { %>
+      <div class="chk-row">
+        <span class="dot <%= c.ok ? 'ok' : 'bad' %>"></span>
+        <span><%= c.name %></span>
+        <small><%= c.metric %></small>
+      </div>
+      <% }) %>
+    </div>
+  </div>
+
+  <button class="gsearch" id="gsearch" type="button" aria-label="<%= t('topbar.search_ph') %>">
+    <svg class="ic"><use href="#i-search"/></svg>
+    <span class="ph"><%= t('topbar.search_ph') %></span>
+    <span class="kbd">⌘K</span>
+  </button>
+
+  <span class="tb-spacer"></span>
+
+  <button class="tb-btn" id="theme-toggle" type="button" aria-label="<%= t('topbar.theme') %>">
+    <svg class="ic" id="theme-ic"><use href="#i-sun"/></svg>
+  </button>
+
+  <div style="position:relative">
+    <button class="tb-btn" id="bell-btn" type="button" aria-label="<%= t('topbar.notifications') %>" aria-haspopup="true" aria-expanded="false">
+      <svg class="ic"><use href="#i-bell"/></svg>
+      <% if (unreadNotif > 0) { %><span class="ndot" id="bell-dot"></span><% } %>
+    </button>
+    <div class="menu" id="bell-menu" hidden>
+      <div class="menu-head">
+        <span><%= t('topbar.notifications') %></span>
+        <button class="card-link" id="mark-read" type="button" style="border:0;background:none;cursor:pointer;font-size:14px;font-weight:500;color:var(--accent)"><%= t('topbar.mark_read') %></button>
+      </div>
+      <% if (notifItems.length === 0) { %>
+      <div class="chk-row"><%= t('topbar.all_clear') %></div>
+      <% } else { %>
+      <% notifItems.forEach(function (n) { %>
+      <div class="chk-row">
+        <span class="dot" style="background:<%= n.read ? 'var(--surface-3)' : 'var(--info)' %>"></span>
+        <span style="flex:1;font-size:13px"><%= n.text %></span>
+        <small><%= timeAgo(n.at) %></small>
+      </div>
+      <% }) %>
+      <% } %>
+    </div>
+  </div>
+
+  <span class="tb-div" aria-hidden="true"></span>
+
+  <div style="position:relative">
+    <button class="user-btn" id="user-btn" type="button" aria-haspopup="true" aria-expanded="false">
+      <span class="avatar sm" style="background:linear-gradient(135deg,var(--accent),var(--accent-hover));color:var(--accent-ink)">A</span>
+      <span class="uname"><%= userName %></span>
+      <svg class="ic ic-sm"><use href="#i-chevDown"/></svg>
+    </button>
+    <div class="menu" id="user-menu" hidden>
+      <div class="menu-head"><span><%= userName %></span><small style="font-weight:400"><%= t('topbar.profile') %></small></div>
+      <button class="menu-item" data-user="profile" type="button"><svg class="ic"><use href="#i-pen"/></svg><span><%= t('settings.tab.general') %></span></button>
+      <button class="menu-item" data-user="settings" type="button"><svg class="ic"><use href="#i-settings"/></svg><span><%= t('nav.settings') %></span></button>
+      <button class="menu-item" data-user="about" type="button"><svg class="ic"><use href="#i-info"/></svg><span><%= t('nav.about') %></span></button>
+      <div class="menu-div" role="presentation"></div>
+      <button class="menu-item" id="lang-en" type="button"><svg class="ic"><use href="#i-languages"/></svg><span><%= lang === 'en' ? 'English ✓' : 'English' %></span></button>
+      <button class="menu-item" id="lang-ur" type="button"><svg class="ic"><use href="#i-languages"/></svg><span>اردو<%= lang === 'ur' ? ' ✓' : '' %></span></button>
+    </div>
+  </div>
+
+  <button class="tb-btn" id="search-m" type="button" aria-label="<%= t('topbar.search_ph') %>" style="display:none">
+    <svg class="ic"><use href="#i-search"/></svg>
+  </button>
+</header>

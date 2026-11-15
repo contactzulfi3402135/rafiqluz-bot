@@ -1,0 +1,188 @@
+<%# HOME — spec §6.1, four rows %>
+<script>window.__HOME_SERIES = <%- JSON.stringify(series) %>;
+window.__SETUP_STEPS = <%- JSON.stringify(setup.steps) %>;</script>
+
+<div class="home-greet">
+  <div>
+    <h1 id="greet-title"><%= t('greeting.title', { greeting, name: settings.name }) %></h1>
+    <div class="sub"><%= t('greeting.sub') %></div>
+  </div>
+  <button class="btn btn-danger sm" id="greet-panic" type="button"><svg class="ic"><use href="#i-pause"/></svg><span><%= t('home.panic') %></span></button>
+</div>
+
+<!-- Row 1: KPI cards -->
+<div class="grid">
+  <div class="sp3 kpi t-emerald">
+    <div class="kpi-top">
+      <span class="kpi-ic"><svg class="ic"><use href="#i-message"/></svg></span>
+      <div class="kpi-body"><div class="kpi-label"><%= t('home.kpi.today') %></div><div class="kpi-val num" id="kpi-today-val"><%= kpis.today.value %></div></div>
+    </div>
+    <div class="kpi-foot">
+      <span class="delta good"><svg class="ic"><use href="#i-trendUp"/></svg><span class="num"><%= kpis.today.delta %></span></span>
+      <span data-spark="today"></span>
+    </div>
+  </div>
+  <div class="sp3 kpi t-blue">
+    <div class="kpi-top">
+      <span class="kpi-ic"><svg class="ic"><use href="#i-checkCircle"/></svg></span>
+      <div class="kpi-body"><div class="kpi-label"><%= t('home.kpi.success') %></div><div class="kpi-val num"><%= kpis.success.value %></div></div>
+    </div>
+    <div class="kpi-foot">
+      <span class="delta good"><svg class="ic"><use href="#i-trendUp"/></svg><span class="num"><%= kpis.success.delta %></span></span>
+      <span data-spark="success"></span>
+    </div>
+  </div>
+  <div class="sp3 kpi t-violet">
+    <div class="kpi-top">
+      <span class="kpi-ic"><svg class="ic"><use href="#i-layers"/></svg></span>
+      <div class="kpi-body"><div class="kpi-label"><%= t('home.kpi.net') %></div><div class="kpi-val num"><%= kpis.net.value %></div></div>
+    </div>
+    <div class="kpi-foot">
+      <span class="delta good"><svg class="ic"><use href="#i-trendUp"/></svg><span class="num"><%= kpis.net.delta %></span></span>
+      <span data-spark="net"></span>
+    </div>
+  </div>
+  <div class="sp3 kpi t-amber">
+    <div class="kpi-top">
+      <span class="kpi-ic"><svg class="ic"><use href="#i-zap"/></svg></span>
+      <div class="kpi-body"><div class="kpi-label"><%= t('home.kpi.latency') %></div><div class="kpi-val num"><%= kpis.latency.value %></div></div>
+    </div>
+    <div class="kpi-foot">
+      <span class="delta good"><svg class="ic"><use href="#i-trendDown"/></svg><span class="num"><%= kpis.latency.delta %></span></span>
+      <span data-spark="latency"></span>
+    </div>
+  </div>
+
+  <!-- Row 2 -->
+  <div class="sp4 card">
+    <div class="card-h"><span class="card-t"><%= t('home.health') %></span></div>
+    <div class="gauge-wrap">
+      <div class="gauge" id="home-gauge"></div>
+      <div class="checklist" style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:8px">
+        <% health.home.forEach(function (c) { %>
+        <div class="check-row"><svg class="ic"><use href="#i-checkCircle"/></svg><span><%= c.name %></span></div>
+        <% }) %>
+      </div>
+    </div>
+    <button class="card-link" id="selftest-home" type="button" style="border:0;background:none;cursor:pointer;font-size:14px;font-weight:500;color:var(--accent);padding:0;margin-top:12px"><%= t('home.health_run') %></button>
+    <div class="test-log" style="margin-top:12px"></div>
+  </div>
+
+  <div class="sp5 card">
+    <div class="card-h">
+      <span class="card-t"><%= t('home.activity') %> <span class="pill-status" style="height:20px;font-size:11px;padding:0 8px;vertical-align:middle"><span class="dot" style="width:6px;height:6px;animation:pulse 1.6s infinite"></span><%= t('common.live') %></span></span>
+      <a class="card-link" href="/logs"><%= t('common.see_all') %></a>
+    </div>
+    <div id="act-list">
+      <% recent.forEach(function (a) { %>
+      <div class="act-row">
+        <span class="act-dot <%= a.kind === 'failed' ? 'err' : a.kind === 'skipped' ? 'warn' : 'ok' %>"></span>
+        <span class="act-body"><b><%= a.status %></b> · <%= a.text %></span>
+        <span class="act-time"><%= timeAgo(a.at) %></span>
+      </div>
+      <% }) %>
+    </div>
+    <div class="small muted" style="margin-top:8px"><%= t('home.activity_live') %></div>
+  </div>
+
+  <div class="sp3 card pacing-card on">
+    <div class="card-h">
+      <span class="card-t"><%= t('home.pacing') %></span>
+      <span class="tog" id="pacing-toggle" role="switch" tabindex="0" aria-checked="true" aria-label="<%= t('home.pacing') %>"></span>
+    </div>
+    <div class="small" style="color:var(--text-2)"><%= t('home.pacing_sub') %></div>
+    <div id="pacing-spark" style="margin-top:12px"></div>
+    <div class="cap" id="pacing-cap"><%= t('home.pacing_delay', { n: pacing.delay }) %></div>
+  </div>
+
+  <!-- Row 3 -->
+  <div class="sp6 card" style="display:flex;gap:20px;align-items:stretch">
+    <div style="flex:1;min-width:0">
+      <div class="card-h" style="margin-bottom:8px">
+        <span class="rowline" style="gap:10px">
+          <span class="tile" style="width:40px;height:40px;border-radius:10px;background:var(--warning-soft);color:var(--warning-text);display:grid;place-items:center"><svg class="ic"><use href="#i-zap"/></svg></span>
+          <span class="card-t"><%= t('home.setup') %></span>
+        </span>
+      </div>
+      <p class="small" style="color:var(--text-2)"><%= t('home.setup_sub') %></p>
+      <div class="bar lg" style="margin-top:12px"><i style="width:<%= Math.round(setup.steps.filter(s=>s.done).length / setup.steps.length * 100) %>%"></i></div>
+      <div class="small muted num" style="margin-top:4px"><%= t('home.setup_done', { n: setup.steps.filter(s=>s.done).length }) %></div>
+      <button class="btn btn-primary" id="setup-open" type="button" style="margin-top:12px"><%= t('home.setup_continue') %></button>
+    </div>
+    <div class="rocket-plate" aria-hidden="true">
+      <svg width="84" height="84" viewBox="0 0 84 84" fill="none">
+        <defs>
+          <linearGradient id="rk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8B5CF6"/><stop offset="1" stop-color="#3B82F6"/></linearGradient>
+          <linearGradient id="fl" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#10B981"/><stop offset="1" stop-color="#F59E0B"/></linearGradient>
+        </defs>
+        <circle cx="60" cy="20" r="3" fill="#F8FAFC" opacity=".7"/><circle cx="72" cy="34" r="2" fill="#F8FAFC" opacity=".5"/><circle cx="20" cy="52" r="2.4" fill="#F8FAFC" opacity=".5"/>
+        <path d="M42 10c10 6 14 18 12 30l-6 10H36l-6-10c-2-12 2-24 12-30Z" fill="url(#rk)"/>
+        <circle cx="42" cy="28" r="6" fill="#0B0F14"/><circle cx="42" cy="28" r="3.4" fill="#3B82F6"/>
+        <path d="M30 42l-8 10 10-2M54 42l8 10-10-2" fill="#8B5CF6"/>
+        <path d="M38 52c-1 8 1 14 4 18 3-4 5-10 4-18Z" fill="url(#fl)"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="sp6 card">
+    <div class="card-h">
+      <span class="card-t"><%= t('home.queue_overview') %></span>
+      <a class="card-link" href="/queue"><%= t('common.view_queue') %></a>
+    </div>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr);gap:20px">
+      <div class="stat-mini"><span class="tile ti-blue"><svg class="ic"><use href="#i-clock"/></svg></span><div><div class="lab"><%= t('status.pending') %></div><div class="val num"><%= qcounts.pending %></div></div></div>
+      <div class="stat-mini"><span class="tile ti-green"><svg class="ic"><use href="#i-check"/></svg></span><div><div class="lab"><%= t('status.approved') %></div><div class="val num"><%= qcounts.approved %></div></div></div>
+      <div class="stat-mini"><span class="tile ti-amber"><svg class="ic"><use href="#i-timer"/></svg></span><div><div class="lab"><%= t('status.waiting') %></div><div class="val num"><%= qcounts.waiting %></div></div></div>
+    </div>
+  </div>
+
+  <!-- Row 4 -->
+  <div class="sp8 card">
+    <div class="card-h">
+      <span class="card-t"><%= t('home.chart') %></span>
+      <div class="chips" id="home-ranges">
+        <button class="chip range-chip" data-range="1h" aria-pressed="false"><span class="num"><%= t('home.range.1h') %></span></button>
+        <button class="chip range-chip" data-range="24h" aria-pressed="false"><span class="num"><%= t('home.range.24h') %></span></button>
+        <button class="chip range-chip" data-range="7d" aria-pressed="true"><span class="num"><%= t('home.range.7d') %></span></button>
+        <button class="chip range-chip" data-range="30d" aria-pressed="false"><span class="num"><%= t('home.range.30d') %></span></button>
+      </div>
+    </div>
+    <div class="legend" style="margin-bottom:12px">
+      <span class="li"><span class="sw sw-emerald"></span><%= t('home.legend.published') %></span>
+      <span class="li"><span class="sw sw-blue"></span><%= t('home.legend.skipped') %></span>
+      <span class="li"><span class="sw sw-red"></span><%= t('home.legend.failed') %></span>
+    </div>
+    <div class="chart-box" id="home-chart" data-series="7d"></div>
+  </div>
+
+  <div class="sp4 card">
+    <div class="card-h"><span class="card-t"><%= t('home.quick') %></span></div>
+    <div class="qa-grid">
+      <button class="qa" data-href="/compose" type="button"><svg class="ic"><use href="#i-pen"/></svg><span><%= t('home.qa.newpost') %></span></button>
+      <button class="qa" data-href="/discover" type="button"><svg class="ic"><use href="#i-compass"/></svg><span><%= t('home.qa.discover') %></span></button>
+      <button class="qa" data-href="/analytics" type="button"><svg class="ic"><use href="#i-chart"/></svg><span><%= t('home.qa.reports') %></span></button>
+      <button class="qa" data-href="/settings" type="button"><svg class="ic"><use href="#i-settings"/></svg><span><%= t('home.qa.settings') %></span></button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* sparklines + gauge (client module import) */
+import('/js/charts.js').then(function (C) {
+  var S = window.__HOME_SERIES || {};
+  var k = window.__KPI = <%- JSON.stringify(kpis) %>;
+  document.querySelectorAll('[data-spark]').forEach(function (el) {
+    var key = el.getAttribute('data-spark');
+    var vals = k[key]?.spark || [];
+    var color = { today: 'var(--success)', success: 'var(--violet)', net: 'var(--violet)', latency: 'var(--warning)' }[key];
+    el.innerHTML = C.sparkline(vals, { color: color });
+  });
+  var g = document.getElementById('home-gauge');
+  if (g) {
+    var score = <%- health.score %>;
+    g.innerHTML = C.gaugeSVG(score) + '<div class="gauge-center"><div><div class="gauge-num num">' + score + '</div><div class="gauge-sub">/100</div></div></div>';
+  }
+  var ps = document.getElementById('pacing-spark');
+  if (ps) ps.innerHTML = C.sparkline([18, 16, 15, 13, 12, 12, 11, 12], { color: 'var(--success)' });
+});
+</script>

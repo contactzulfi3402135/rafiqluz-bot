@@ -1,0 +1,43 @@
+<%# DISCOVER — spec §7.4: search + category chips + match cards %>
+<div class="page-head">
+  <div>
+    <h2><%= t('discover.title') %></h2>
+    <div class="sub"><%= t('discover.sub') %></div>
+  </div>
+</div>
+
+<div class="card" style="padding:var(--sp-4);margin-bottom:var(--grid-gap)">
+  <div class="field" style="max-width:420px">
+    <div style="position:relative">
+      <input class="input" id="disc-search" placeholder="<%= t('discover.search_ph') %>" style="padding-inline-start:40px">
+      <svg class="ic" style="position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--text-3)"><use href="#i-search"/></svg>
+    </div>
+  </div>
+  <div class="chips" id="disc-cats" style="margin-top:var(--sp-3)">
+    <button class="chip" data-cat="all" aria-pressed="true"><%= t('discover.all') %></button>
+    <% const cats = [...new Set(discover.map(x => x.tag))]; %>
+    <% cats.forEach((c) => { %>
+    <button class="chip" data-cat="<%= c %>" aria-pressed="false"><%= c %></button>
+    <% }) %>
+  </div>
+</div>
+
+<div class="disc-grid" id="disc-grid">
+  <% discover.forEach(function (x, i) { %>
+  <div class="disc-card" data-id="<%= x.id %>" data-name="<%= x.name %>" data-handle="<%= x.handle %>" data-subs="<%= x.subs %>" data-desc="<%= x.desc %>" data-cat="<%= x.tag %>">
+    <div class="rowline" style="gap:12px">
+      <span class="avatar lg g-<%= i % 6 %>"><%= x.name.charAt(0) %></span>
+      <div style="min-width:0;flex:1">
+        <div class="src-name"><%= x.name %></div>
+        <div class="src-sub"><%= x.handle %> · <%= x.subs %></div>
+      </div>
+      <span class="spill spill-success" title="<%= t('discover.match', { n: x.match }) %>"><span class="dot"></span><span class="num"><%= x.match %>%</span></span>
+    </div>
+    <div class="desc"><%= x.desc %></div>
+    <div class="foot">
+      <button class="btn btn-secondary" data-act="preview" type="button"><%= t('discover.preview') %></button>
+      <button class="btn btn-primary" data-act="add" type="button"><%= t('discover.add') %></button>
+    </div>
+  </div>
+  <% }) %>
+</div>

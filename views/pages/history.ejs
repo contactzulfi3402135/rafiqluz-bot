@@ -1,0 +1,83 @@
+<%# HISTORY — spec §7.7: 80-row table, filters, detail drawer, retry, CSV %>
+<% const ft = (ts) => { const d = new Date(ts); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }; %>
+<script>window.__HISTORY = <%- JSON.stringify(history) %>;</script>
+
+<div class="page-head">
+  <div>
+    <h2><%= t('history.title') %></h2>
+    <div class="sub"><%= t('history.sub') %></div>
+  </div>
+  <div class="acts">
+    <button class="btn btn-secondary" id="hist-export" type="button"><svg class="ic"><use href="#i-download"/></svg><%= t('history.export') %></button>
+  </div>
+</div>
+
+<div class="card" style="padding:var(--sp-4);margin-bottom:var(--grid-gap)">
+  <div class="hist-filters">
+    <div style="position:relative;flex:1;min-width:200px">
+      <input class="input" id="hist-q" placeholder="<%= t('history.search_ph') %>" style="padding-inline-start:40px">
+      <svg class="ic" style="position:absolute;inset-inline-start:12px;top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--text-3)"><use href="#i-search"/></svg>
+    </div>
+    <div class="chips" id="hist-status">
+      <button class="chip" data-st="all" aria-pressed="true"><%= t('history.all') %></button>
+      <button class="chip" data-st="published" aria-pressed="false"><%= t('status.published') %></button>
+      <button class="chip" data-st="failed" aria-pressed="false"><%= t('status.failed') %></button>
+      <button class="chip" data-st="skipped" aria-pressed="false"><%= t('status.skipped') %></button>
+    </div>
+    <select class="select" id="hist-src" style="width:auto" aria-label="<%= t('history.col.source') %>">
+      <option value="all"><%= t('history.all_sources') %></option>
+      <% sources.forEach(function (s) { %><option value="<%= s.name %>"><%= s.name %></option><% }) %>
+    </select>
+  </div>
+</div>
+
+<div class="card" style="padding:0;overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th><%= t('history.col.time') %></th>
+        <th><%= t('history.col.title') %></th>
+        <th><%= t('history.col.source') %></th>
+        <th><%= t('history.col.targets') %></th>
+        <th><%= t('history.col.status') %></th>
+        <th><%= t('history.col.latency') %></th>
+        <th class="num" style="width:44px"></th>
+      </tr>
+    </thead>
+    <tbody id="hist-tbody">
+      <% history.forEach(function (h) { %>
+      <tr data-id="<%= h.id %>" data-title="<%= h.title %>" data-source="<%= h.source %>" data-status="<%= h.status %>" data-targets="<%= h.targets %>" data-latency="<%= h.latency %>" data-at="<%= h.at %>" style="cursor:pointer">
+        <td class="num mono" style="white-space:nowrap"><%= ft(h.at) %></td>
+        <td style="max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500"><%= h.title %></td>
+        <td class="muted" style="white-space:nowrap"><%= h.source %></td>
+        <td class="num"><%= h.targets %></td>
+        <td><span class="spill <%= h.status === 'published' ? 'spill-success' : h.status === 'failed' ? 'spill-error' : 'spill-warning' %>"><span class="dot"></span><%= t('status.' + h.status) %></span></td>
+        <td class="num mono"><%= h.latency.toFixed(2) %></td>
+        <td><button class="ibtn" data-act="export" type="button" aria-label="<%= t('history.export') %>"><svg class="ic ic-sm"><use href="#i-download"/></svg></button></td>
+      </tr>
+      <% }) %>
+    </tbody>
+  </table>
+</div>
+
+<style>
+.hist-filters { display: flex; gap: var(--sp-3); align-items: center; flex-wrap: wrap; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl thead th {
+  text-align: start; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border-1);
+  background: var(--surface-2);
+}
+.tbl tbody tr { border-bottom: 1px solid var(--border-1); transition: background var(--dur) var(--ease); }
+.tbl tbody tr:hover { background: var(--surface-2); }
+.tbl tbody tr:last-child { border-bottom: 0; }
+.tbl td { padding: 10px var(--sp-4); vertical-align: middle; }
+.tbl .num { text-align: end; }
+@media (max-width: 767.98px) {
+  .tbl thead { display: none; }
+  .tbl, .tbl tbody, .tbl tr, .tbl td { display: block; width: 100%; }
+  .tbl tr { border: 1px solid var(--border-1); border-radius: var(--r-m); margin: var(--sp-3); padding: var(--sp-3); }
+  .tbl td { padding: 2px 0; border: 0; text-align: start !important; }
+  .tbl td:nth-child(n + 4) { display: none; }
+}
+</style>

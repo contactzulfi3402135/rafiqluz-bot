@@ -1,0 +1,157 @@
+<%# ANALYTICS — spec §6.4: range picker, 6 stat cards, trends, top sources, 4 tabs, reports %>
+<script>
+window.__AN_STATS = <%- JSON.stringify(stats) %>;
+window.__AN_SERIES = <%- JSON.stringify(series) %>;
+</script>
+
+<div class="page-head">
+  <div>
+    <h2><%= t('analytics.title') %></h2>
+    <div class="sub"><%= t('analytics.sub') %></div>
+  </div>
+  <div class="acts">
+    <div class="range-pick">
+      <select class="select" id="an-range-m" style="width:auto" aria-label="<%= t('analytics.range') %>">
+        <option value="7d"><%= t('home.range.7d') %></option>
+        <option value="30d"><%= t('home.range.30d') %></option>
+        <option value="90d"><%= t('analytics.range.90d') %></option>
+      </select>
+    </div>
+    <div class="seg range-seg" role="radiogroup" aria-label="<%= t('analytics.range') %>">
+      <button type="button" data-range="7d" aria-pressed="true"><%= t('home.range.7d') %></button>
+      <button type="button" data-range="30d" aria-pressed="false"><%= t('home.range.30d') %></button>
+      <button type="button" data-range="90d" aria-pressed="false"><%= t('analytics.range.90d') %></button>
+    </div>
+  </div>
+</div>
+
+<div class="tabs" id="an-tabs" role="tablist">
+  <button class="tab" role="tab" aria-selected="true" data-tab="overview"><%= t('analytics.tab.overview') %></button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="sources"><%= t('analytics.tab.sources') %></button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="targets"><%= t('analytics.tab.targets') %></button>
+  <button class="tab" role="tab" aria-selected="false" data-tab="reports"><%= t('analytics.tab.reports') %></button>
+</div>
+
+<div class="an-panel" data-panel="overview">
+  <div class="an-stats-row" id="an-stats"></div>
+  <div class="card" style="padding:var(--sp-5);margin-top:var(--grid-gap)">
+    <div class="card-h">
+      <span class="card-t"><%= t('analytics.trends') %></span>
+      <div class="legend">
+        <span class="li"><span class="sw sw-emerald"></span><%= t('home.legend.published') %></span>
+        <span class="li"><span class="sw sw-blue"></span><%= t('home.legend.skipped') %></span>
+        <span class="li"><span class="sw sw-red"></span><%= t('home.legend.failed') %></span>
+      </div>
+    </div>
+    <div class="chart-box" id="an-chart" style="margin-top:var(--sp-3)"></div>
+  </div>
+  <div class="card" style="padding:var(--sp-5);margin-top:var(--grid-gap)">
+    <div class="card-h"><span class="card-t"><%= t('analytics.top_sources') %></span></div>
+    <div style="display:flex;flex-direction:column;gap:var(--sp-3);margin-top:var(--sp-3)">
+      <% top.forEach(function (s) { %>
+      <div class="top-src" data-name="<%= s.name %>">
+        <div class="rowline" style="gap:12px;margin-bottom:6px">
+          <b style="font-size:14px;min-width:150px"><%= s.name %></b>
+          <span class="small muted num"><%= s.published.toLocaleString('en-US') %></span>
+          <span class="htag num" style="cursor:default"><%= s.success %>%</span>
+        </div>
+        <div class="bar"><i style="width:<%= s.pct / top[0].pct * 100 %>%"></i></div>
+      </div>
+      <% }) %>
+    </div>
+  </div>
+</div>
+
+<div class="an-panel" data-panel="sources" hidden>
+  <div class="card" style="padding:0;overflow-x:auto">
+    <table class="tbl">
+      <thead><tr><th><%= t('analytics.col.source') %></th><th class="num"><%= t('analytics.col.published') %></th><th class="num"><%= t('analytics.col.success') %></th><th class="num"><%= t('analytics.col.skipped') %></th><th class="num"><%= t('analytics.col.latency') %></th></tr></thead>
+      <tbody>
+        <% srcRows.forEach(function (s) { %>
+        <tr><td style="font-weight:500"><%= s.name %></td><td class="num"><%= s.published.toLocaleString('en-US') %></td><td class="num"><%= s.success %>%</td><td class="num"><%= s.skipped %></td><td class="num mono"><%= s.latency.toFixed(1) %></td></tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="an-panel" data-panel="targets" hidden>
+  <div class="card" style="padding:0;overflow-x:auto">
+    <table class="tbl">
+      <thead><tr><th><%= t('analytics.col.target') %></th><th><%= t('analytics.col.kind') %></th><th class="num"><%= t('analytics.col.members') %></th><th class="num"><%= t('analytics.col.published') %></th><th class="num"><%= t('analytics.col.success') %></th></tr></thead>
+      <tbody>
+        <% tgRows.forEach(function (r) { %>
+        <tr><td style="font-weight:500"><%= r.name %></td><td class="muted"><%= r.kind %></td><td class="num"><%= r.members.toLocaleString('en-US') %></td><td class="num"><%= r.published.toLocaleString('en-US') %></td><td class="num"><%= r.success %>%</td></tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="an-panel" data-panel="reports" hidden>
+  <div class="card" style="padding:var(--sp-4)">
+    <div class="rowline" style="gap:var(--sp-3);align-items:center;margin-bottom:var(--sp-3)">
+      <span class="small muted"><%= t('analytics.reports_sub') %></span>
+      <span class="grow"></span>
+      <button class="btn btn-primary" id="an-rep-new" type="button"><svg class="ic"><use href="#i-plus"/></svg><%= t('analytics.reports_new') %></button>
+    </div>
+    <div id="an-reports">
+      <% reports.forEach(function (r) { %>
+      <div class="src-row" style="border-bottom:1px solid var(--border-1);min-height:64px">
+        <span class="avatar sm g-2"><svg class="ic ic-sm"><use href="#i-fileText"/></svg></span>
+        <div><div class="src-name" style="font-size:14px"><%= { daily: t('analytics.reports.daily'), weekly: t('analytics.reports.weekly'), monthly: t('analytics.reports.monthly') }[r.type] %></div>
+        <div class="src-sub" style="direction:ltr"><%= r.date %> · <%= r.meta %></div></div>
+        <span class="src-count num"><%= r.size %></span>
+        <div class="src-acts">
+          <button class="btn btn-secondary sm rep-dl" data-id="<%= r.id %>" type="button"><%= t('analytics.reports.download') %></button>
+          <button class="btn btn-secondary sm rep-html" data-id="<%= r.id %>" type="button"><%= t('analytics.reports.pdf') %></button>
+        </div>
+      </div>
+      <% }) %>
+    </div>
+  </div>
+</div>
+
+<style>
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl thead th { text-align: start; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--border-1); background: var(--surface-2); }
+.tbl tbody tr { border-bottom: 1px solid var(--border-1); }
+.tbl tbody tr:last-child { border-bottom: 0; }
+.tbl td { padding: 10px var(--sp-4); }
+.tbl .num { text-align: end; }
+</style>
+
+<script>
+/* tab panels */
+(function () {
+  var tabs = document.querySelectorAll('#an-tabs .tab');
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.setAttribute('aria-selected', x === tab ? 'true' : 'false'); });
+      document.querySelectorAll('.an-panel').forEach(function (p) { p.hidden = p.dataset.panel !== tab.dataset.tab; });
+      window.dispatchEvent(new Event('resize'));
+    });
+  });
+  /* initial report downloads (server-rendered rows) */
+  var reports = <%- JSON.stringify(reports) %>;
+  function dl(id) {
+    var r = reports.find(function (x) { return x.id === id; });
+    if (!r) return;
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([['date,metric,value'].concat(r.meta.split(' · ').map(function (x) { return '"' + x + '"'; })).join('\n')], { type: 'text/csv' }));
+    a.download = r.type + '-' + r.date + '.csv';
+    a.click();
+  }
+  function html(id) {
+    var r = reports.find(function (x) { return x.id === id; });
+    if (!r) return;
+    var doc = '<!doctype html><meta charset="utf-8"><title>Raqifluz</title><body style="font-family:system-ui;max-width:720px;margin:40px auto"><h1>Raqifluz — ' + r.type + '</h1><p>' + r.date + '</p><p>' + r.meta + '</p>';
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([doc], { type: 'text/html' }));
+    a.download = r.type + '-' + r.date + '.html';
+    a.click();
+  }
+  document.querySelectorAll('.rep-dl').forEach(function (b) { b.addEventListener('click', function () { dl(parseInt(b.dataset.id, 10)); }); });
+  document.querySelectorAll('.rep-html').forEach(function (b) { b.addEventListener('click', function () { html(parseInt(b.dataset.id, 10)); }); });
+})();
+</script>

@@ -1,0 +1,53 @@
+<%# HEALTH — spec §7.15: score gauge, 8 checks, run self-test, system info %>
+<div class="page-head">
+  <div>
+    <h2><%= t('health.title') %></h2>
+    <div class="sub"><%= t('health.sub') %></div>
+  </div>
+  <div class="acts">
+    <button class="btn btn-primary" id="ht-run" type="button"><svg class="ic"><use href="#i-activity"/></svg><%= t('health.run') %></button>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="sp4 card" style="display:flex;flex-direction:column;align-items:center;gap:var(--sp-4);padding:var(--sp-6)">
+    <div class="gauge" id="ht-gauge"></div>
+    <div class="small muted" style="text-align:center"><%= t('health.score_sub') %></div>
+    <div class="rowline" style="gap:12px">
+      <span class="spill spill-success"><span class="dot"></span><%= t('status.healthy') %></span>
+      <span class="small muted num">8/8</span>
+    </div>
+  </div>
+
+  <div class="sp8">
+    <div class="health-grid" id="ht-grid">
+      <% health.checks.forEach(function (c) { %>
+      <div class="hcheck" data-name="<%= c.name %>" data-metric="<%= c.metric %>">
+        <div class="top">
+          <span class="tile ti-green"><svg class="ic"><use href="#i-<%= c.icon %>"/></svg></span>
+          <div style="min-width:0">
+            <b style="font-size:14px"><%= c.name %></b>
+            <div class="metric"><%= c.metric %></div>
+          </div>
+        </div>
+        <span class="spill <%= c.ok ? 'spill-success' : 'spill-error' %>" style="align-self:flex-start"><span class="dot"></span><%= c.ok ? t('status.healthy') : t('status.error') %></span>
+      </div>
+      <% }) %>
+    </div>
+    <div class="test-log" id="ht-log" style="margin-top:var(--grid-gap)"></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:var(--grid-gap);padding:var(--sp-2) var(--sp-5)">
+  <div class="sys-row"><span class="k"><%= t('about.sys.node') %></span><span class="v mono"><%= node %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.mode') %></span><span class="v"><%= t('about.sim') %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.uptime') %></span><span class="v num"><%= timeAgo(uptime) %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.db') %></span><span class="v num"><%= dbSize %></span></div>
+</div>
+
+<script>
+import('/js/charts.js').then(function (C) {
+  var g = document.getElementById('ht-gauge');
+  if (g) g.innerHTML = C.gaugeSVG(<%- health.score %>, 140) + '<div class="gauge-center"><div><div class="gauge-num num">' + <%- health.score %> + '</div><div class="gauge-sub">/100</div></div></div>';
+});
+</script>

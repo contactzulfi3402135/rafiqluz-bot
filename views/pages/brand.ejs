@@ -1,0 +1,77 @@
+<%# BRAND — spec §7.9: identity, footer with live preview, hashtag sets, watermark %>
+<script>window.__BRAND = <%- JSON.stringify(brand) %>;</script>
+
+<div class="page-head">
+  <div>
+    <h2><%= t('brand.title') %></h2>
+    <div class="sub"><%= t('brand.sub') %></div>
+  </div>
+  <div class="acts">
+    <button class="btn btn-primary" id="br-save" type="button"><%= t('common.save') %></button>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="sp6 card" style="padding:var(--sp-5)">
+    <div class="card-h"><span class="card-t"><%= t('brand.identity') %></span></div>
+    <div class="set-grid">
+      <div class="field"><label for="br-name"><%= t('brand.name') %></label><input class="input" id="br-name" value="<%= brand.name %>" maxlength="40"></div>
+      <div class="field"><label for="br-tag"><%= t('brand.tagline') %></label><input class="input" id="br-tag" value="<%= brand.tagline %>" maxlength="80"></div>
+      <div class="field set-full"><label for="br-tone"><%= t('brand.tone') %></label>
+        <select class="select" id="br-tone">
+          <% ['professional', 'friendly', 'bold', 'minimal'].forEach(function (o) { %><option value="<%= o %>" <%= brand.tone === o ? 'selected' : '' %>><%= t('brand.tone.' + o) %></option><% }) %>
+        </select>
+      </div>
+    </div>
+
+    <hr style="border:0;border-top:1px solid var(--border-1);margin:var(--sp-5) 0">
+
+    <div class="card-h"><span class="card-t"><%= t('brand.footer') %></span></div>
+    <div class="field">
+      <label for="br-footer"><%= t('brand.footer') %></label>
+      <input class="input mono" id="br-footer" value="<%= brand.footer %>" maxlength="120">
+    </div>
+    <div class="chips" id="br-vars" style="margin:var(--sp-2) 0 var(--sp-3)">
+      <span class="htag" data-v="{brand}" style="cursor:pointer">{brand}</span>
+      <span class="htag" data-v="{date}" style="cursor:pointer">{date}</span>
+    </div>
+    <div class="small muted"><%= t('brand.footer_prev') %></div>
+    <div class="bubble" id="br-foot-prev" style="margin-top:var(--sp-2);font-size:13px"><%= brand.footer %></div>
+
+    <hr style="border:0;border-top:1px solid var(--border-1);margin:var(--sp-5) 0">
+
+    <div class="card-h" style="align-items:center">
+      <span class="card-t"><%= t('brand.watermark') %></span>
+      <span class="num small" id="br-op-val"><%= brand.watermark.opacity %>%</span>
+    </div>
+    <div class="set-grid">
+      <div class="field"><label for="br-pos"><%= t('brand.pos') %></label>
+        <select class="select" id="br-pos">
+          <% ['top-start', 'top-end', 'bottom-start', 'bottom-end'].forEach(function (o) { %><option value="<%= o %>" <%= brand.watermark.pos === o ? 'selected' : '' %>><%= t('brand.pos.' + o) %></option><% }) %>
+        </select>
+      </div>
+      <div class="field"><label for="br-op"><%= t('brand.opacity') %></label><input type="range" id="br-op" min="0" max="100" value="<%= brand.watermark.opacity %>" style="width:100%"></div>
+    </div>
+  </div>
+
+  <div class="sp6 card" style="padding:var(--sp-5)">
+    <div class="card-h"><span class="card-t"><%= t('brand.hashtags') %></span></div>
+    <div id="br-sets" style="display:flex;flex-direction:column;gap:var(--sp-3)">
+      <% brand.hashtags.forEach(function (s) { %>
+      <div class="br-set rowline" data-name="<%= s.name %>" style="gap:8px;flex-wrap:wrap;align-items:center">
+        <b class="small" style="min-width:64px"><%= s.name %></b>
+        <% s.tags.forEach(function (h) { %><span class="htag"><%= h %></span><% }) %>
+        <button class="ibtn" data-act="rmset" style="width:24px;height:24px;margin-inline-start:auto" aria-label="<%= t('common.delete') %>"><svg class="ic ic-xs"><use href="#i-x"/></svg></button>
+      </div>
+      <% }) %>
+    </div>
+    <div class="rowline" style="gap:var(--sp-2);margin-top:var(--sp-4)">
+      <input class="input" id="br-set-ph" placeholder="<%= t('brand.set_ph') %>" style="flex:1">
+      <button class="btn btn-secondary" id="br-addset" type="button"><svg class="ic"><use href="#i-plus"/></svg><%= t('brand.add_set') %></button>
+    </div>
+  </div>
+</div>
+
+<style>
+.br-set { border: 1px solid var(--border-1); border-radius: var(--r-m); padding: 10px 12px; background: var(--surface-2); }
+</style>

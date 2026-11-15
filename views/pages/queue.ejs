@@ -1,0 +1,92 @@
+<%# QUEUE — spec §6.2 %>
+<script>
+window.__Q_ITEMS = <%- JSON.stringify(items) %>;
+window.__Q_COUNTS = <%- JSON.stringify(counts) %>;
+window.__TGT_NAMES = <%- JSON.stringify(targets.slice(0, 24).map(tg => tg.name)) %>;
+</script>
+
+<div class="page-head">
+  <div>
+    <h2><%= t('queue.title') %></h2>
+    <div class="sub"><%= t('queue.sub') %></div>
+  </div>
+  <div class="acts">
+    <div style="position:relative">
+      <button class="btn btn-secondary" id="q-bulk" type="button"><%= t('queue.bulk') %></button>
+      <div class="menu" id="q-bulk-menu" hidden style="min-width:220px">
+        <button class="menu-item" data-bulk="approve" type="button"><svg class="ic"><use href="#i-check"/></svg><span><%= t('queue.bulk.approve_all') %></span></button>
+        <button class="menu-item" data-bulk="delay" type="button"><svg class="ic"><use href="#i-clock"/></svg><span><%= t('queue.bulk.delay') %></span></button>
+        <button class="menu-item" data-bulk="select" type="button"><svg class="ic"><use href="#i-inbox"/></svg><span><%= t('queue.bulk.select_all') %></span></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="q-toolbar">
+  <div class="chips" id="q-chips">
+    <button class="chip" data-f="pending" aria-pressed="true"><%= t('queue.filter.pending') %> <span class="cnt num">(0)</span></button>
+    <button class="chip" data-f="delayed" aria-pressed="false"><%= t('queue.filter.delayed') %> <span class="cnt num">(0)</span></button>
+    <button class="chip" data-f="approved" aria-pressed="false"><%= t('queue.filter.approved') %> <span class="cnt num">(0)</span></button>
+    <button class="chip" data-f="all" aria-pressed="false"><%= t('queue.filter.all') %> <span class="cnt num">(0)</span></button>
+  </div>
+  <select class="select" id="q-type" style="width:auto" aria-label="<%= t('queue.type') %>"></select>
+  <select class="select" id="q-type-m" style="width:auto;display:none" aria-label="<%= t('queue.type') %>"></select>
+</div>
+
+<div id="q-list">
+  <% items.forEach(function (q) { %>
+  <div class="q-row" data-id="<%= q.id %>" data-status="<%= q.status %>" data-type="<%= q.media && q.media !== 'text' ? 'media' : 'text' %>" data-title="<%= q.title %>">
+    <span class="chk" role="checkbox" tabindex="0" aria-checked="false" aria-label="<%= t('queue.select_all') %>"><svg class="ic"><use href="#i-check"/></svg></span>
+    <span class="thumb lg thumb-<%= q.media && ['city','laptop','plant','chart','chat','skyline','text'].includes(q.media) ? q.media : 'text' %>"><svg class="ic"><use href="#i-<%= { city: 'building', laptop: 'laptop', plant: 'leaf', chart: 'chart', chat: 'messageSquare' }[q.media] || 'image' %>"/></svg></span>
+    <div class="q-content">
+      <div class="q-title"><%= q.title %></div>
+      <div class="q-prev"><%= q.text %></div>
+      <div class="q-meta">
+        <% (q.tags || []).slice(0, 4).forEach(function (tg) { %><span class="htag"><%= tg %></span><% }) %>
+        <span><%= t('queue.from', { s: q.source, n: q.targets }) %></span>
+      </div>
+    </div>
+    <% if (q.status !== 'pending') { %>
+    <span class="status-mini spill <%= q.status === 'approved' ? 'spill-success' : q.status === 'delayed' ? 'spill-warning' : 'spill-info' %>" style="align-self:flex-start;margin-top:4px"><span class="dot"></span><%= t('status.' + q.status) %></span>
+    <% if (q.status === 'delayed' && q.note) { %><div class="small muted" style="max-width:120px;font-size:11px;align-self:flex-start;margin-top:4px"><%= q.note %></div><% } %>
+    <% } %>
+    <span class="q-time"><%= timeAgo(q.at) %></span>
+    <div class="q-acts">
+      <button class="btn btn-primary sm" data-act="approve" type="button"><%= t('queue.approve') %></button>
+      <button class="btn btn-secondary sm" data-act="edit" type="button"><%= t('queue.edit') %></button>
+      <button class="btn btn-danger sm discard-label" data-act="discard" type="button"><%= t('queue.discard') %></button>
+      <button class="btn btn-danger sm desk-only" style="display:none" data-act="discard" type="button" aria-label="<%= t('queue.discard') %>"><svg class="ic"><use href="#i-trash"/></svg></button>
+      <div class="q-inline-confirm"><span><%= t('queue.confirm_discard') %></span><button class="btn btn-danger sm" data-act="discard-yes" type="button"><%= t('common.yes') %></button><button class="btn btn-secondary sm" data-act="discard-no" type="button"><%= t('common.no') %></button></div>
+    </div>
+  </div>
+  <% }) %>
+</div>
+
+<div class="selbar" id="q-selbar">
+  <label class="chk-row2"><span class="chk" role="checkbox" tabindex="0" aria-checked="false" data-sel="all" style="cursor:pointer"><svg class="ic"><use href="#i-check"/></svg></span><span class="small"><%= t('queue.select_all') %></span></label>
+  <span class="cnt"><%= t('queue.selected', { n: 0 }) %></span>
+  <select class="select" style="width:auto;height:36px" data-sel="delay" aria-label="<%= t('queue.delay_opt', { n: 5 }) %>">
+    <option value="">—</option><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="60">60 min</option>
+  </select>
+  <span class="grow"></span>
+  <button class="btn btn-secondary sm" data-sel="clear" type="button"><%= t('common.cancel') %></button>
+  <button class="btn btn-primary sm" data-sel="approve" type="button"><%= t('queue.bulk_approve', { n: 0 }) %></button>
+  <button class="btn btn-danger sm" data-sel="discard" type="button"><%= t('queue.discard') %></button>
+</div>
+
+<div class="m-sticky">
+  <button class="btn btn-primary" id="q-approve-all-m" type="button" style="width:100%"><%= t('queue.approve_all_mobile', { n: counts.pending }) %></button>
+</div>
+
+<script>
+/* mobile: show second type select instead of desktop one */
+(function () {
+  var mq = window.matchMedia('(max-width: 767.98px)');
+  var apply = function () {
+    document.getElementById('q-type').style.display = mq.matches ? 'none' : '';
+    document.getElementById('q-type-m').style.display = mq.matches ? '' : 'none';
+  };
+  apply();
+  mq.addEventListener ? mq.addEventListener('change', apply) : mq.addListener(apply);
+})();
+</script>

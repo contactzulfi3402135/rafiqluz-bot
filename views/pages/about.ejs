@@ -1,0 +1,68 @@
+<%# ABOUT — spec §7.17: identity, simulation note, system, checklist, exports %>
+<div class="about-hero">
+  <span class="brand-mark tile ti-emerald" style="width:64px;height:64px;border-radius:20px;display:grid;place-items:center"><svg class="ic" style="width:32px;height:32px"><use href="#i-zap"/></svg></span>
+  <h2><%= meta.product %></h2>
+  <div class="ver num">v<%= meta.version %> · <%= t('about.sim') %></div>
+  <div class="tag"><%= meta.tagline %></div>
+</div>
+
+<div class="card" style="padding:var(--sp-5)">
+  <div class="banner" style="background:var(--warning-soft);color:var(--warning-text);align-items:flex-start">
+    <svg class="ic" style="flex:none;margin-top:1px"><use href="#i-info"/></svg>
+    <span class="small"><%= t('setg.sim_note') %></span>
+  </div>
+</div>
+
+<div class="feat-grid" style="margin-top:var(--grid-gap)">
+  <div class="feat">
+    <span class="tile ti-emerald"><svg class="ic"><use href="#i-radio"/></svg></span>
+    <b><%= t('about.f1') %></b>
+    <small><%= t('about.f1d') %></small>
+  </div>
+  <div class="feat">
+    <span class="tile ti-blue"><svg class="ic"><use href="#i-message"/></svg></span>
+    <b><%= t('about.f2') %></b>
+    <small><%= t('about.f2d') %></small>
+  </div>
+  <div class="feat">
+    <span class="tile ti-violet"><svg class="ic"><use href="#i-bot"/></svg></span>
+    <b><%= t('about.f3') %></b>
+    <small><%= t('about.f3d') %></small>
+  </div>
+  <div class="feat">
+    <span class="tile ti-amber"><svg class="ic"><use href="#i-shield"/></svg></span>
+    <b><%= t('about.f4') %></b>
+    <small><%= t('about.f4d') %></small>
+  </div>
+</div>
+
+<div class="card" style="margin-top:var(--grid-gap);padding:var(--sp-2) var(--sp-5)">
+  <div class="sys-row"><span class="k"><%= t('about.sys.version') %></span><span class="v mono">v<%= meta.version %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.node') %></span><span class="v mono"><%= meta.nodeVersion %></span></div>
+  <div class="sys-row"><span class="k"><%= t('setg.tz') %></span><span class="v mono"><%= meta.timezone %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.mode') %></span><span class="v"><%= t('about.sim') %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.uptime') %></span><span class="v num"><%= timeAgo(uptime) %></span></div>
+  <div class="sys-row"><span class="k"><%= t('about.sys.db') %></span><span class="v num"><%= dbSize %></span></div>
+</div>
+
+<div class="card" style="margin-top:var(--grid-gap);padding:var(--sp-5)">
+  <div class="card-h"><span class="card-t"><%= t('about.checklist') %></span></div>
+  <div class="small muted" style="margin-bottom:var(--sp-3)"><%= t('about.checklist_sub') %></div>
+  <% [
+    ['i-checkCircle', t('about.c1')],
+    ['i-checkCircle', t('about.c2')],
+    ['i-checkCircle', t('about.c3')],
+    ['i-checkCircle', t('about.c4')],
+    ['i-checkCircle', t('about.c5')],
+  ].forEach(function (c) { %>
+  <div class="cl-line">
+    <svg class="ic" style="color:var(--success-text);flex:none;margin-top:2px"><use href="#<%= c[0] %>"/></svg>
+    <span><%= c[1] %></span>
+  </div>
+  <% }) %>
+</div>
+
+<div class="rowline" style="gap:var(--sp-3);margin-top:var(--grid-gap);flex-wrap:wrap">
+  <button class="btn btn-secondary" id="ab-export" type="button"><svg class="ic"><use href="#i-fileText"/></svg><%= t('about.export_all') %></button>
+  <button class="btn btn-secondary" id="ab-backup" type="button"><svg class="ic"><use href="#i-download"/></svg><%= t('sets.backup_now') %></button>
+</div>

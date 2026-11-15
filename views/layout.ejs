@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="<%= lang %>" dir="<%= dir %>" data-theme="<%= theme %>" data-accent="<%= accent %>">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title><%= t('app.name') %> · <%= t('nav.' + navKey) %></title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2310B981'/%3E%3Cpath d='M10 22c0-7 4-11 12-12-1 8-5 12-12 12Z' fill='%2304130D'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/base.css">
+<link rel="stylesheet" href="/css/components.css">
+<link rel="stylesheet" href="/css/pages.css">
+<script>
+/* first paint: apply saved theme/accent/language overrides (client-side, before hydration) */
+(function () {
+  try {
+    var d = document.documentElement;
+    var ls = localStorage;
+    var theme = ls.getItem('rq_theme');
+    var accent = ls.getItem('rq_accent');
+    var m = (document.cookie.match(/(?:^|;\s*)rq_lang=(en|ur)/) || [])[1];
+    var lang = m || ls.getItem('rq_lang') || null;
+    if (theme) d.setAttribute('data-theme', theme);
+    if (accent) d.setAttribute('data-accent', accent);
+    if (lang) { d.setAttribute('lang', lang); d.setAttribute('dir', lang === 'ur' ? 'rtl' : 'ltr'); }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body data-page="<%= page %>">
+<%- include('partials/icons') %>
+<div class="shell">
+  <%- include('partials/sidebar') %>
+  <div class="main">
+    <%- include('partials/topbar') %>
+    <% if (paused) { %>
+    <div class="panic-banner" id="panic-banner" role="alert">
+      <svg class="ic"><use href="#i-alertTriangle"/></svg>
+      <span><%= t('panic.banner') %></span>
+      <button class="btn btn-primary sm" id="panic-resume" type="button"><%= t('panic.resume_btn') %></button>
+    </div>
+    <% } %>
+    <main class="content" id="content">
+      <%- content %>
+    </main>
+  </div>
+</div>
+
+<%- include('partials/mobile') %>
+<%- include('partials/templates') %>
+<%# page scripts (server-injected JSON + modules) %>
+<script id="boot-data" type="application/json"><%- JSON.stringify({
+  page, lang, dir, theme, accent, paused, queueCount, unreadNotif, healthState,
+  now: now, tz: settings.timezone, settings: { theme: settings.theme, accent: settings.accent, language: settings.language, switches: settings.switches, bulkDelay: settings.automation.bulkDelay },
+  name: settings.name, botName: settings.botName, mode
+}) -%></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

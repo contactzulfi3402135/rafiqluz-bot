@@ -1,0 +1,68 @@
+<%# Client-side templates (filled by app.js) — spec §2.4 components %>
+
+<template id="tpl-drawer">
+  <div class="scrim" data-close-d></div>
+  <aside class="drawer" role="dialog" aria-modal="true" aria-label="<%= t('common.edit') %>">
+    <header class="drawer-h">
+      <h3 data-tpl="title"></h3>
+      <button class="ibtn" type="button" data-close-d aria-label="<%= t('common.close') %>"><svg class="ic"><use href="#i-x"/></svg></button>
+    </header>
+    <div class="drawer-b" data-tpl="body"></div>
+    <footer class="drawer-f" data-tpl="foot"></footer>
+  </aside>
+</template>
+
+<template id="tpl-modal">
+  <div class="modal-scrim" data-close-m2></div>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="<%= t('common.edit') %>">
+    <header class="modal-h">
+      <div>
+        <h3 data-tpl="title"></h3>
+        <p data-tpl="sub"></p>
+      </div>
+      <button class="ibtn" type="button" data-close-m2 aria-label="<%= t('common.close') %>"><svg class="ic"><use href="#i-x"/></svg></button>
+    </header>
+    <div class="modal-b" data-tpl="body"></div>
+    <footer class="modal-f" data-tpl="foot"></footer>
+  </div>
+</template>
+
+<template id="tpl-toast">
+  <div class="toast" role="status">
+    <svg class="ic"><use href="#i-checkCircle"/></svg>
+    <span data-tpl="msg" style="flex:1"></span>
+    <button class="x ibtn" type="button" style="width:24px;height:24px" data-close-toast aria-label="<%= t('common.close') %>"><svg class="ic ic-xs"><use href="#i-x"/></svg></button>
+  </div>
+</template>
+
+<template id="tpl-empty">
+  <div class="empty">
+    <span class="tile"><svg class="ic" style="width:22px;height:22px"><use href="#i-inbox"/></svg></span>
+    <h4 data-tpl="title"></h4>
+    <p data-tpl="sub"></p>
+    <div data-tpl="act"></div>
+  </div>
+</template>
+
+<template id="tpl-kpi">
+  <div class="kpi" data-tpl="root">
+    <div class="kpi-top">
+      <span class="kpi-ic" data-tpl="icon"></span>
+      <div class="kpi-body">
+        <div class="kpi-label" data-tpl="label"></div>
+        <div class="kpi-val" data-tpl="value"></div>
+      </div>
+    </div>
+    <div class="kpi-foot">
+      <span class="delta" data-tpl="delta"></span>
+      <span data-tpl="spark"></span>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-tabs">
+  <div class="tabs" role="tablist" data-tpl="root"></div>
+</template>
+
+<%# toast zone (single, aria-live) %>
+<div class="toast-zone" id="toasts" aria-live="polite" aria-atomic="false"></div>
