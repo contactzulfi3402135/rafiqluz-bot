@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -14,16 +14,17 @@
 <link rel="apple-touch-icon" href="/pwa/icon-192.png">
 <link rel="icon" href="/pwa/icon-192.png" sizes="192x192">
 <script>
-/* theme before first paint (dark / light / auto, persisted) */
+/* theme before first paint (dark / light / glass / auto, persisted) */
 try {
   var __t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'dark';
   if (__t === 'auto') __t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
   document.documentElement.dataset.theme = __t;
 } catch (e) {}
 </script>
+<link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=s1">
+<link rel="stylesheet" href="/app.css?v=s11">
 </head>
 <body>
 <div class="app" id="app">
@@ -32,68 +33,84 @@ try {
      Eight groups, 25 screens (product spec §1.3): Command · Broadcast ·
      Channels · People · Studio · Intelligence · Insights · System.
      Active screen = 3 px citron rail. Phone: drawer + 5-item bottom bar. -->
-    <aside class="sidebar" id="sidebar" aria-label="Primary">
-    <!-- v10 · Slate Console — brand · 6 groups / 25 screens · status foot -->
+  <aside class="sidebar" id="sidebar" aria-label="Primary">
+    <!-- Signal Desk shell (reference): brand lockup — rotated R mark + name + SIGNAL DESK -->
     <div class="sb-head">
-      <span class="sb-logo" aria-hidden="true">R</span>
-      <span class="sb-name" id="brandName"><%= botName %></span>
-      <button class="icon-btn sb-collapse" id="sbCollapse" title="Collapse sidebar" aria-label="Collapse sidebar"><%- icon('chev-left','icon icon-xs') %></button>
+      <span class="sb-logo brand-mark" aria-hidden="true">R</span>
+      <span class="brand-copy">
+        <span class="sb-name" id="brandName"><%= botName %></span>
+        <span class="brand-sub">SIGNAL DESK</span>
+      </span>
+      <button class="icon-btn sb-collapse" id="sbCollapse" title="Collapse sidebar" aria-label="Collapse sidebar"><%- icon('menu','icon icon-sm') %></button>
+    </div>
+    <!-- Reference: one-line health state under the brand (full report: Insights · Health) -->
+    <div class="side-health" id="sideHealth" title="Eight operational checks — full report in Insights · Health">
+      <span class="health-dot" id="sideHealthDot"></span><span id="sideHealthTxt">Checking…</span><span class="health-count" id="sideHealthCount">—/8</span>
     </div>
     <nav class="sb-areas" aria-label="Areas">
-      <!-- v10 IA — six groups, 25 screens, nothing removed -->
+      <!-- Signal Desk IA (product spec §1.3) — eight groups, 25 screens, nothing removed -->
       <div class="sb-group" data-group="command" aria-label="Command"><span class="g-txt">Command</span></div>
       <div class="sb-items" id="gCommandItems">
-        <button class="sb-item" data-view="home" data-lbl="Home" role="link" tabindex="0"><%- icon('layout-dashboard') %><span class="lbl">Home</span></button>
-        <button class="sb-item" data-view="newpost" data-lbl="Compose" role="link" tabindex="0"><%- icon('pen') %><span class="lbl">Compose</span></button>
-        <button class="sb-item" data-view="approvals" data-lbl="Queue" role="link" tabindex="0"><%- icon('inbox') %><span class="lbl">Queue</span></button>
-        <button class="sb-item" data-view="scheduled" data-lbl="Scheduled" role="link" tabindex="0"><%- icon('calendar-clock') %><span class="lbl">Scheduled</span></button>
-        <button class="sb-item" data-view="posts" data-lbl="History" role="link" tabindex="0"><%- icon('file-text') %><span class="lbl">History</span></button>
-        <button class="sb-item" data-view="bulk" data-lbl="Bulk Send" role="link" tabindex="0"><%- icon('megaphone') %><span class="lbl">Bulk Send</span></button>
+        <button class="sb-item" data-top="command" data-view="home" data-lbl="Home" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">H</span><span class="lbl">Home</span></button>
+      </div>
+      <div class="sb-group" data-group="broadcast" aria-label="Broadcast"><span class="g-txt">Broadcast</span></div>
+      <div class="sb-items" id="gBroadcastItems">
+        <button class="sb-item" data-top="broadcast" data-view="newpost" data-lbl="Compose" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">C</span><span class="lbl">Compose</span></button>
+        <button class="sb-item" data-top="broadcast" data-view="approvals" data-lbl="Queue" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">Q</span><span class="lbl">Queue</span></button>
+        <button class="sb-item" data-top="broadcast" data-view="scheduled" data-lbl="Scheduled" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">S</span><span class="lbl">Scheduled</span></button>
+        <button class="sb-item" data-top="broadcast" data-view="posts" data-lbl="History" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">H</span><span class="lbl">History</span></button>
+        <button class="sb-item" data-top="broadcast" data-view="bulk" data-lbl="Bulk Send" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">B</span><span class="lbl">Bulk Send</span></button>
       </div>
       <div class="sb-group" data-group="channels" aria-label="Channels"><span class="g-txt">Channels</span></div>
       <div class="sb-items" id="gChannelsItems">
-        <button class="sb-item" data-view="sources" data-lbl="Sources" role="link" tabindex="0"><%- icon('radio') %><span class="lbl">Sources</span></button>
-        <button class="sb-item" data-view="targets" data-lbl="Targets" role="link" tabindex="0"><%- icon('target') %><span class="lbl">Targets</span></button>
-        <button class="sb-item" data-view="browse" data-lbl="Discover" role="link" tabindex="0"><%- icon('globe') %><span class="lbl">Discover</span></button>
-        <button class="sb-item" data-view="routing" data-lbl="Routing" role="link" tabindex="0"><%- icon('route') %><span class="lbl">Routing</span></button>
+        <button class="sb-item" data-top="channels" data-view="sources" data-lbl="Sources" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">S</span><span class="lbl">Sources</span></button>
+        <button class="sb-item" data-top="channels" data-view="targets" data-lbl="Targets" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">T</span><span class="lbl">Targets</span></button>
+        <button class="sb-item" data-top="channels" data-view="browse" data-lbl="Discover" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">D</span><span class="lbl">Discover</span></button>
+        <button class="sb-item" data-top="channels" data-view="routing" data-lbl="Routing" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">R</span><span class="lbl">Routing</span></button>
       </div>
       <div class="sb-group" data-group="people" aria-label="People"><span class="g-txt">People</span></div>
       <div class="sb-items" id="gPeopleItems">
-        <button class="sb-item" data-view="whatsapp" data-lbl="WhatsApp Inbox" role="link" tabindex="0"><%- icon('chat') %><span class="lbl">WhatsApp Inbox</span></button>
-        <button class="sb-item" data-view="journal" data-lbl="Contacts" role="link" tabindex="0"><%- icon('journal') %><span class="lbl">Contacts</span></button>
-        <button class="sb-item" data-view="aireply" data-lbl="Auto-replies" role="link" tabindex="0"><%- icon('reply') %><span class="lbl">Auto-replies</span></button>
+        <button class="sb-item" data-top="people" data-view="whatsapp" data-lbl="WhatsApp Inbox" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">W</span><span class="lbl">WhatsApp Inbox</span></button>
+        <button class="sb-item" data-top="people" data-view="journal" data-lbl="Contacts" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">C</span><span class="lbl">Contacts</span></button>
+        <button class="sb-item" data-top="people" data-view="aireply" data-lbl="Auto-replies" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">Auto-replies</span></button>
       </div>
       <div class="sb-group" data-group="studio" aria-label="Studio"><span class="g-txt">Studio</span></div>
       <div class="sb-items" id="gStudioItems">
-        <button class="sb-item" data-view="media" data-lbl="Library" role="link" tabindex="0"><%- icon('image') %><span class="lbl">Library</span></button>
-        <button class="sb-item" data-view="branding" data-lbl="Brand" role="link" tabindex="0"><%- icon('layers') %><span class="lbl">Brand</span></button>
-        <button class="sb-item" data-view="aipilot" data-lbl="AI Pilot" role="link" tabindex="0"><%- icon('bot') %><span class="lbl">AI Pilot</span></button>
-        <button class="sb-item" data-view="guardrails" data-lbl="Rules" role="link" tabindex="0"><%- icon('shield') %><span class="lbl">Rules</span></button>
+        <button class="sb-item" data-top="studio" data-view="media" data-lbl="Library" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">L</span><span class="lbl">Library</span></button>
+        <button class="sb-item" data-top="studio" data-view="branding" data-lbl="Brand" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">B</span><span class="lbl">Brand</span></button>
       </div>
-      <div class="sb-group" data-group="monitor" aria-label="Monitor"><span class="g-txt">Monitor</span></div>
-      <div class="sb-items" id="gMonitorItems">
-        <button class="sb-item" data-view="analytics" data-lbl="Analytics" role="link" tabindex="0"><%- icon('chart') %><span class="lbl">Analytics</span></button>
-        <button class="sb-item" data-view="digest" data-lbl="Reports &amp; Digest" role="link" tabindex="0"><%- icon('languages') %><span class="lbl">Reports &amp; Digest</span></button>
-        <button class="sb-item" data-view="health" data-lbl="Health" role="link" tabindex="0"><%- icon('pulse') %><span class="lbl">Health</span></button>
-        <button class="sb-item" data-view="logs" data-lbl="Logs" role="link" tabindex="0"><%- icon('terminal') %><span class="lbl">Logs</span></button>
-        <button class="sb-item" data-view="audit" data-lbl="Audit" role="link" tabindex="0"><%- icon('history') %><span class="lbl">Audit</span></button>
+      <div class="sb-group" data-group="intelligence" aria-label="Intelligence"><span class="g-txt">Intelligence</span></div>
+      <div class="sb-items" id="gIntelligenceItems">
+        <button class="sb-item" data-top="intelligence" data-view="aipilot" data-lbl="AI Pilot" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">AI</span><span class="lbl">AI Pilot</span></button>
+        <button class="sb-item" data-top="intelligence" data-view="guardrails" data-lbl="Rules" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">R</span><span class="lbl">Rules</span></button>
+      </div>
+      <div class="sb-group" data-group="insights" aria-label="Insights"><span class="g-txt">Insights</span></div>
+      <div class="sb-items" id="gInsightsItems">
+        <button class="sb-item" data-top="insights" data-view="analytics" data-lbl="Analytics" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">Analytics</span></button>
+        <button class="sb-item" data-top="insights" data-view="digest" data-lbl="Reports & Digest" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">R</span><span class="lbl">Reports & Digest</span></button>
+        <button class="sb-item" data-top="insights" data-view="health" data-lbl="Health" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">H</span><span class="lbl">Health</span></button>
+        <button class="sb-item" data-top="insights" data-view="logs" data-lbl="Logs" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">L</span><span class="lbl">Logs</span></button>
+        <button class="sb-item" data-top="insights" data-view="audit" data-lbl="Audit" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">Audit</span></button>
       </div>
       <div class="sb-group" data-group="system" aria-label="System"><span class="g-txt">System</span></div>
       <div class="sb-items" id="gSystemItems">
-        <button class="sb-item" data-view="email" data-lbl="Email" role="link" tabindex="0"><%- icon('mail') %><span class="lbl">Email</span></button>
-        <button class="sb-item" data-view="settings" data-lbl="Settings" role="link" tabindex="0"><%- icon('settings') %><span class="lbl">Settings</span></button>
-        <button class="sb-item" data-view="about" data-lbl="About" role="link" tabindex="0"><%- icon('info') %><span class="lbl">About</span></button>
+        <button class="sb-item" data-top="system" data-view="email" data-lbl="Email" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">E</span><span class="lbl">Email</span></button>
+        <button class="sb-item" data-top="system" data-view="settings" data-lbl="Settings" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">S</span><span class="lbl">Settings</span></button>
+        <button class="sb-item" data-top="system" data-view="about" data-lbl="About" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">About</span></button>
       </div>
     </nav>
-    <div class="sb-foot">
-      <div class="sb-panic" id="sbPanicStatus" data-p="off" title="Panic stop — the red shield in the top bar pauses everything at once and restores the exact previous state">
-        <span class="dot"></span><span class="p-txt">Panic standby</span>
+    <!-- Reference: paired-identity card · labeled panic stop · workspace owner row -->
+    <div class="sb-foot sidebar-bottom">
+      <div class="paired-card" id="pairedCard">
+        <span class="paired-indicator" id="pairedDot"></span>
+        <div><strong id="pairedTitle">WhatsApp</strong><small id="pairedSub">Link from Home — one scan, never again</small></div>
       </div>
-      <div class="sb-user">
+      <button class="panic-sidebar" id="sbPanicStatus" data-p="off" title="Panic stop status — the shield in the top bar pauses and resumes everything (exact state is restored)"><span class="dot"></span><span class="p-txt">Panic stop</span><kbd>⎋</kbd></button>
+      <div class="user-row">
         <span class="avatar" id="userAvatar">RA</span>
-        <span class="sb-usermeta"><strong id="userName">Workspace owner</strong><small>Administrator</small></span>
-        <button class="icon-btn" id="helpBtn" title="What does everything do? — one-line guide" aria-label="Help"><%- icon('help','icon icon-sm') %></button>
-        <button class="icon-btn" id="themeBtn" title="Theme: light / dark / auto" aria-label="Toggle theme"></button>
+        <div class="user-copy"><strong id="userName">Workspace owner</strong><small>Administrator</small></div>
+        <button class="icon-btn" id="helpBtn" title="What does everything do? — one-line guide" aria-label="Help — what each switch does"><%- icon('help','icon icon-sm') %></button>
+        <button class="icon-btn" id="themeBtn" title="Theme: dark / light / glass / auto" aria-label="Toggle theme"></button>
       </div>
     </div>
   </aside>
@@ -102,20 +119,25 @@ try {
   <!-- ═══ MAIN ═══ -->
   <div class="main">
     <!-- Reference top bar: breadcrumb · command search · top actions (connection pill, bell, panic) -->
-        <header class="topbar">
+    <header class="topbar">
       <button class="icon-btn menu-btn" id="menuBtn" title="Menu" aria-label="Menu"><%- icon('menu') %></button>
-      <h1 class="tb-title" id="viewTitle">Home</h1>
-      <div class="tb-right">
-        <button class="pal-btn" id="palBtn" title="Search &amp; jump (Ctrl K)" aria-label="Open command palette">
-          <%- icon('search','icon icon-sm') %><span class="lbl">Search…</span><kbd>Ctrl K</kbd>
-        </button>
-        <span class="wa-badge" id="waBadge" data-s="" title="WhatsApp link state — routine deploys never ask for a new QR scan"><span class="dot"></span><span id="waBadgeText"></span></span>
+      <div class="breadcrumb" id="breadcrumb">
+        <span id="crumbGroup">COMMAND</span><b>/</b><h1 class="tb-title" id="viewTitle">Dashboard</h1>
+      </div>
+      <div class="tb-right top-actions">
+        <span class="connection-pill" id="connPill" title="WhatsApp link state — routine deploys never ask for a new QR scan">
+          <span class="health-dot" id="connDot"></span><span id="connState">Checking…</span><span class="muted">·</span><strong id="connName"><%= botName %> Primary</strong>
+        </span>
+        <span class="wa-badge" id="waBadge" data-s="" hidden><span class="dot"></span><span id="waBadgeText"></span></span>
         <span class="ro-chip" id="roChip" hidden>READ-ONLY</span>
         <button class="icon-btn bell-btn notification-button" id="notifBtn" title="Notifications" aria-label="Notifications">
           <%- icon('bell','icon icon-sm') %><span class="bell-badge" id="notifBadge" hidden>0</span>
         </button>
-        <button class="icon-btn panic-btn" id="panicBtn" title="Panic stop — pause everything instantly (exact state is restored)" aria-label="Panic stop">
-          <%- icon('shield','icon icon-sm') %><span class="panic-lbl">Panic</span>
+        <button class="icon-btn panic-btn panic-top" id="panicBtn" title="Panic stop — pause everything instantly (exact state is restored)" aria-label="Panic stop">
+          <%- icon('shield','icon icon-sm') %><span class="panic-lbl">Panic stop</span>
+        </button>
+        <button class="pal-btn command-search" id="palBtn" title="Search & jump (Ctrl K)" aria-label="Open command palette">
+          <%- icon('search','icon icon-xs') %><span class="lbl">Search anything…</span><kbd>Ctrl K</kbd>
         </button>
       </div>
     </header>
@@ -143,64 +165,45 @@ try {
       <!-- ═══ OVERVIEW · DASHBOARD ═══ -->
       <section class="view" data-view="home">
         <div id="cloudNote"></div>
-        <!-- v10 · command center — status band · heading · pause bar · KPIs · 2-col grid -->
-        <div class="status-band" id="statusBand">
-          <div class="st-cell">
-            <span class="st-dot" id="stWaDot" data-s=""></span>
-            <span class="st-txt"><small>WhatsApp</small><b id="stWa">—</b></span>
-            <a class="st-link" href="#view=whatsapp" data-goview="whatsapp">Open</a>
-          </div>
-          <div class="st-cell">
-            <span class="st-dot" id="stPanicDot" data-s="ok"></span>
-            <span class="st-txt"><small>Panic stop</small><b id="stPanic">Standby</b></span>
-          </div>
-          <div class="st-cell">
-            <span class="st-dot" id="stPaceDot" data-s="ok"></span>
-            <span class="st-txt"><small>Pacing</small><b id="stPace">Stable</b></span>
-          </div>
-          <div class="st-cell">
-            <span class="st-dot" id="stCloudDot" data-s=""></span>
-            <span class="st-txt"><small>Cloud memory</small><b id="stCloud">—</b></span>
-          </div>
-        </div>
-        <div class="home-head">
-          <div class="hh-l">
-            <h1 id="homeGreeting">Good day.</h1>
-            <p class="muted" id="homeSub">Your broadcast desk, at a glance.</p>
-          </div>
-          <button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button>
+        <!-- Reference home shell: eyebrow + greeting + live badge + New post -->
+        <div class="page-heading">
+          <div><div class="eyebrow">COMMAND / OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Your broadcast desk is operating normally. Here is the signal across your channels.</p></div>
+          <div class="heading-actions"><span class="live-badge"><i></i> LIVE · 24/7</span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
         </div>
         <div class="card pausebar" id="pauseBar" data-hov>
           <div class="pb-t"><b id="pauseHead">Mirroring is running.</b><span class="muted" id="pauseSub">Every source → every target, automatically.</span></div>
           <button class="btn btn-d" id="pauseBtn"><%- icon('pause','icon icon-xs') %> <span>Pause all mirroring</span></button>
         </div>
         <div class="kpis kpi-grid" id="kpiGrid"></div>
+        <!-- Signal Desk §1.3: read-only automation chips — state only, deep-link to the owner -->
         <div class="rosw-row" id="homeSwitchChips" hidden></div>
+        <!-- Reference home grid: activity + queue + health + pacing + recent, all real data -->
         <div class="home-grid">
-          <div class="hg-main">
-            <div class="card">
-              <div class="card-h"><%- icon('chart','icon') %> Activity <span class="muted tiny">— last 24 hours</span><span class="h-legend"><i class="lg pub"></i>Published<i class="lg skip"></i>Skipped<i class="lg fail"></i>Failed</span></div>
+          <div class="home-col home-col-main">
+            <div class="card activity-panel">
+              <div class="card-h"><%- icon('chart','icon') %> Activity overview <span class="muted tiny">— post outcomes over the last 24 hours</span></div>
               <div class="card-b">
+                <div class="chart-legend"><span><i class="legend-dot published"></i>Published</span><span><i class="legend-dot skipped"></i>Skipped</span><span><i class="legend-dot failed"></i>Failed</span></div>
                 <div class="activity-chart" id="homeChart"><div class="chart-y" id="homeChartY"></div><div class="home-chart-svg" id="homeChartSvg"></div><div class="chart-x" id="homeChartX"></div></div>
                 <div class="muted tiny" id="homeChartFoot" style="margin-top:8px"></div>
               </div>
             </div>
-            <div class="card">
-              <div class="card-h"><%- icon('zap','icon') %> Recent activity <a class="text-link" href="#view=logs" data-goview="logs">Full history</a></div>
+            <div class="card recent-panel">
+              <div class="card-h"><%- icon('zap','icon') %> Recent activity <span class="muted tiny">— latest processing outcomes</span> <a class="text-link" href="#view=logs" data-goview="logs" style="margin-left:auto">Full history ↗</a></div>
               <div class="card-b"><div class="tl" id="activityFeed"></div></div>
             </div>
           </div>
-          <div class="hg-side">
-            <div class="card">
-              <div class="card-h"><%- icon('inbox','icon') %> Queue <span class="pill num" id="homeQueueCount">0</span><a class="text-link" href="#view=approvals" data-goview="approvals">Review</a></div>
+          <div class="home-col home-col-side">
+            <div class="card queue-panel">
+              <div class="card-h"><%- icon('inbox','icon') %> Queue status <span class="muted tiny">— items that need attention</span></div>
               <div class="card-b" id="homeQueue"></div>
             </div>
-            <div class="card">
-              <div class="card-h"><%- icon('pulse','icon') %> Health <a class="text-link" href="#view=health" data-goview="health">Details</a></div>
+            <div class="card health-panel">
+              <div class="card-h"><%- icon('pulse','icon') %> System health <span class="muted tiny">— eight operational checks</span> <a class="text-link" href="#view=health" data-goview="health" style="margin-left:auto">Details ↗</a></div>
               <div class="card-b" id="homeHealth"></div>
             </div>
             <div class="card pacing-panel">
-              <div class="card-h"><%- icon('gauge','icon') %> Adaptive pacing <span class="muted tiny">— delivery rate controller</span><a class="text-link" href="#view=guardrails" data-goview="guardrails">Open control</a></div>
+              <div class="card-h"><%- icon('gauge','icon') %> Adaptive pacing <span class="muted tiny">— delivery rate controller</span> <a class="text-link" href="#view=guardrails" data-goview="guardrails" style="margin-left:auto">Open control ↗</a></div>
               <div class="card-b" id="homePace"><div id="paceStrip" hidden></div><div id="homePaceBody"></div></div>
             </div>
           </div>
@@ -753,7 +756,7 @@ try {
       <!-- ═══ CONTENT · APPROVAL QUEUE (5A · R37/R43) ═══ -->
       <section class="view" data-view="approvals" hidden>
         <div class="ph">
-          <div class="ph-l"><h2>Queue</h2><div class="ph-d">Review posts before they publish — approve, edit or reject. The Live Queue shows what is pending, in flight or failed right now.</div></div>
+          <div class="ph-l"><h2>Approval queue</h2><div class="ph-d">Review each post before it reaches its selected targets — approve, edit or discard. The Live Queue shows what is pending, in flight or failed right now.</div></div>
           <div class="ph-a">
             <div class="tabs" id="queueTabs">
               <button class="tab on" data-qt="approvals">Approvals <span class="pill num" id="queueBadge" hidden>0</span></button>
@@ -773,9 +776,11 @@ try {
               </div>
             </div>
           </div>
+          <!-- v11 · mockup 03: status filter chips (real counts, client-side filter — no re-fetch) -->
+          <div class="qchips-row" id="queueChips"></div>
           <div class="card">
             <div class="card-h">Waiting for your decision <span class="pill num" id="pendingCount">0</span>
-              <button class="btn btn-sm" id="queueApproveAll" style="margin-left:auto"><%- icon('check','icon icon-xs') %> Approve all</button>
+              <button class="btn btn-p btn-sm" id="queueApproveAll" style="margin-left:auto"><%- icon('check','icon icon-xs') %> Bulk approve</button>
             </div>
             <div class="card-b"><div id="queueList"></div></div>
           </div>
@@ -1344,14 +1349,13 @@ try {
         <div class="set-wrap">
           <!-- Signal Desk reference §1.4: five settings sections, exact names and order.
                Each tab may cover several set-groups (data-sets). -->
-          <nav class="set-nav" id="setNav" aria-label="Settings sections">
-      <!-- v10 · five settings sections, short names, same coverage -->
-      <button class="set-tab on" data-setgroup="general" role="tab" tabindex="0"><%- icon('settings','icon icon-sm') %><span class="lbl">General</span></button>
-      <button class="set-tab" data-setgroup="automation" role="tab" tabindex="0"><%- icon('gauge','icon icon-sm') %><span class="lbl">Delivery</span></button>
-      <button class="set-tab" data-setgroup="whatsapp" data-sets="whatsapp,ai" role="tab" tabindex="0"><%- icon('route','icon icon-sm') %><span class="lbl">Integrations</span></button>
-      <button class="set-tab" data-setgroup="access" data-sets="access,session" role="tab" tabindex="0"><%- icon('shield','icon icon-sm') %><span class="lbl">Security</span></button>
-      <button class="set-tab" data-setgroup="data" role="tab" tabindex="0"><%- icon('database','icon icon-sm') %><span class="lbl">Data</span></button>
-    </nav>
+          <nav class="set-nav settings-rail" id="setNav" aria-label="Settings sections">
+      <button class="set-tab on" data-setgroup="general" role="tab" tabindex="0"><%- icon('globe','icon icon-sm') %><span class="lbl">Workspace &amp; language</span></button>
+      <button class="set-tab" data-setgroup="automation" role="tab" tabindex="0"><%- icon('gauge','icon icon-sm') %><span class="lbl">Delivery controls</span></button>
+      <button class="set-tab" data-setgroup="whatsapp" data-sets="whatsapp,ai" role="tab" tabindex="0"><%- icon('route','icon icon-sm') %><span class="lbl">Integrations &amp; reports</span></button>
+      <button class="set-tab" data-setgroup="access" data-sets="access,session" role="tab" tabindex="0"><%- icon('shield','icon icon-sm') %><span class="lbl">Security &amp; sessions</span></button>
+      <button class="set-tab" data-setgroup="data" role="tab" tabindex="0"><%- icon('database','icon icon-sm') %><span class="lbl">Data &amp; recovery</span></button>
+          </nav>
           <div class="set-body" id="setBody">
 
       <div class="set-group on" data-setgroup="general">
@@ -1386,6 +1390,7 @@ try {
               <div class="radio-line" id="themeRadios">
                 <button type="button" class="radio-pill" data-theme-choice="dark">Dark</button>
                 <button type="button" class="radio-pill" data-theme-choice="light">Light</button>
+                <button type="button" class="radio-pill" data-theme-choice="glass">Glass</button>
                 <button type="button" class="radio-pill" data-theme-choice="auto">System</button>
               </div>
             </div>
@@ -1770,6 +1775,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=s1"></script>
+<script src="/app.js?v=s11"></script>
 </body>
 </html>
