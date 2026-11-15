@@ -112,16 +112,20 @@ async function ico(name) {
 
 /* ── 2 · THEME (dark / light / auto, persisted) ─────────────────── */
 function themeCurrent() {
-  let t = 'light';
-  try { t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'light'; } catch (e) {}
+  let t = 'dark';
+  try { t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'dark'; } catch (e) {}
   return t;
 }
 function themeApplied(t) { return t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; }
+/* v11 · theme order: dark → light → glass → auto (glass = frosted third theme) */
+const THEME_ORDER = ['dark', 'light', 'glass', 'auto'];
 function setThemeIcon(t) {
   const b = $('#themeBtn');
   if (!b) return;
-  const name = t === 'dark' ? 'sun' : (t === 'light' ? 'moon' : 'gauge');
-  b.setAttribute('data-tip', `Theme: ${t} — click for ${t === 'dark' ? 'light' : t === 'light' ? 'auto' : 'dark'}`);
+  const name = t === 'dark' ? 'sun' : (t === 'light' ? 'moon' : t === 'glass' ? 'sparkles' : 'gauge');
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(t) + 1) % THEME_ORDER.length];
+  b.setAttribute('data-tip', `Theme: ${t} — click for ${next}`);
+  b.title = `Theme: ${t} — click for ${next}`;
   ico(name).then((s) => { if (b.isConnected) b.innerHTML = s; });
 }
 (function themeInit() {
@@ -131,8 +135,8 @@ function setThemeIcon(t) {
   if (t === 'auto') matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { document.documentElement.dataset.theme = themeApplied('auto'); });
 })();
 $('#themeBtn').addEventListener('click', () => {
-  const order = ['light', 'dark', 'auto'];
-  const next = order[(order.indexOf(themeCurrent()) + 1) % order.length];
+  const cur = themeCurrent();
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
   try { localStorage.setItem('rc-theme', next); } catch (e) {}
   document.documentElement.dataset.theme = themeApplied(next);
   setThemeIcon(next);
@@ -240,19 +244,21 @@ const LEGACY_VIEWS = {
   dashboard: 'home', content: 'newpost', beautify: 'newpost',
   calendar: 'scheduled', templates: 'media', 'auto-reply': 'aireply'
 };
-/* v10 IA — every view maps to one of the six Slate Console groups. Drives sidebar state. */
+/* every view maps to one of the eight Signal Desk groups (spec §1.3). Drives sidebar state. */
 const AREA = {
-  home: 'command', newpost: 'command', approvals: 'command', scheduled: 'command', posts: 'command', bulk: 'command',
+  home: 'command',
+  newpost: 'broadcast', approvals: 'broadcast', scheduled: 'broadcast', posts: 'broadcast', bulk: 'broadcast',
   sources: 'channels', targets: 'channels', browse: 'channels', routing: 'channels',
   whatsapp: 'people', journal: 'people', aireply: 'people',
-  media: 'studio', branding: 'studio', aipilot: 'studio', guardrails: 'studio',
-  analytics: 'monitor', digest: 'monitor', health: 'monitor', logs: 'monitor', audit: 'monitor',
+  media: 'studio', branding: 'studio',
+  aipilot: 'intelligence', guardrails: 'intelligence',
+  analytics: 'insights', digest: 'insights', health: 'insights', logs: 'insights', audit: 'insights',
   email: 'system', settings: 'system', about: 'system'
 };
-/* group labels (one per group) */
+/* Reference top-bar breadcrumb labels (one per group) */
 const GROUP_LABEL = {
-  command: 'COMMAND', channels: 'CHANNELS', people: 'PEOPLE',
-  studio: 'STUDIO', monitor: 'MONITOR', system: 'SYSTEM'
+  command: 'COMMAND', broadcast: 'BROADCAST', channels: 'CHANNELS', people: 'PEOPLE',
+  studio: 'STUDIO', intelligence: 'INTELLIGENCE', insights: 'INSIGHTS', system: 'SYSTEM'
 };
 const loaders = {};
 let currentView = 'home';
@@ -445,37 +451,43 @@ setInterval(pollStatus, 30000);
           </div>
           <button class="btn btn-g full-width" data-goview="approvals">Review approvals →</button>`;
       }
-      /* system health */
+      /* system health — v11: mockup 01 layout, one segment per real check (8 checks) */
       const hh = $('#homeHealth');
       if (hh && h) {
         const parts = (h.parts) || [];
         const passed = parts.filter((p) => (p.score || 0) >= 80).length;
         const score = (typeof h.score === 'number') ? h.score : 0;
-        const top = parts.slice(0, 4).map((p) => `<span><i data-s="${(p.score || 0) >= 80 ? 'ok' : 'warn'}"></i>${esc(p.name)}</span>`).join('');
+        const segs = parts.map((p) => `<i class="hseg" data-s="${(p.score || 0) >= 80 ? 'ok' : 'warn'}" title="${esc(p.name)} — ${p.score || 0}/100"></i>`).join('');
+        const nBad = parts.length - passed;
         hh.innerHTML = `
-          <div class="health-score-row">
-            <div class="health-ring" style="background:conic-gradient(var(--ok) 0 ${score}%,var(--surface3) ${score}% 100%)"><div><strong>${score}</strong><small>/100</small></div></div>
-            <div class="health-checks">${top}</div>
-          </div>
-          <div class="health-bottom"><span>${passed} of ${parts.length || 8} checks healthy</span><a class="text-link" href="#view=health" data-goview="health">Run self-test →</a></div>`;
+          <div class="health-score-line"><div class="health-score"><strong>${score}</strong><small>/100</small></div><span class="muted tiny">${parts.length || 8} checks</span></div>
+          <div class="hsegs">${segs}</div>
+          <div class="health-bottom"><span>${passed} healthy${nBad ? ` · ${nBad} needs attention` : ''}</span><a class="text-link" href="#view=health" data-goview="health">Run self-test →</a></div>`;
       }
-      /* adaptive pacing — paint into #homePaceBody, never #homePace (which owns the pinned #paceStrip) */
+      /* adaptive pacing — paint into #homePaceBody, never #homePace (which owns the pinned #paceStrip)
+         v11: mode chip + real stats (fixed 1.5 s gap, live queue depth) — the controller is automatic, so no manual toggle */
       const hp = $('#homePaceBody');
       if (hp) {
         const pace = (ov && ov.pace) || {};
+        const depth = (ov && ov.queue && ov.queue.pending) || 0;
+        const chip = pace.active
+          ? '<span class="pace-chip on"><i class="pc-dot"></i>Adaptive · Active</span>'
+          : '<span class="pace-chip"><i class="pc-dot"></i>Adaptive · Stable</span>';
+        const stats = `<div class="pace-stats"><div><strong>1.5 s</strong><span>fixed gap between sends</span></div><div><strong>${depth}</strong><span>item(s) in queue</span></div></div>`;
         if (pace.active) {
           const gap = Math.round((pace.gapMs || 0) / 1000);
           hp.innerHTML = `
-            <div class="pacing-rate"><strong>${gap}</strong><span>s between sends</span><span class="trend" style="color:var(--warn)">Active</span></div>
-            <p class="panel-copy">Rate is being adjusted against ${esc(pace.reason || 'a recent failure spike')} — it clears itself after 20 quiet minutes.</p>
+            ${chip}
+            <div class="pacing-rate" style="margin-top:10px"><strong>${gap}</strong><span>s added between sends right now</span></div>
+            <p class="panel-copy">The adaptive controller is waiting longer against ${esc(pace.reason || 'a recent failure spike')} — it clears itself after 20 quiet minutes.</p>
             <div class="pacing-meter"><span style="width:${Math.min(100, 25 + gap)}%"></span></div>
-            <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>`;
+            <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>${stats}`;
         } else {
           hp.innerHTML = `
-            <div class="pacing-rate"><strong>0</strong><span>s added gap</span><span class="trend up">Stable</span></div>
-            <p class="panel-copy">No failure spike right now — posts flow at the normal rate. The controller adds a gap automatically after repeated failures.</p>
+            ${chip}
+            <p class="panel-copy">No failure spike right now — posts flow at the normal rate. The controller adds a gap automatically after repeated failures and never drops a post.</p>
             <div class="pacing-meter"><span style="width:0%"></span></div>
-            <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>`;
+            <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>${stats}`;
         }
       }
     } catch (e) { /* panels keep their last good state */ }
@@ -519,7 +531,7 @@ setInterval(pollStatus, 30000);
   });
   /* theme radios (Workspace & language) share the sidebar theme cycle */
   function syncThemeRadios() {
-    const t = (function () { try { return localStorage.getItem('rc-theme') || 'light'; } catch (e) { return 'light'; } })();
+    const t = (function () { try { return localStorage.getItem('rc-theme') || 'dark'; } catch (e) { return 'dark'; } })();
     $$('#themeRadios [data-theme-choice]').forEach((b) => b.classList.toggle('selected', b.dataset.themeChoice === t));
   }
   const tr = $('#themeRadios');
@@ -1007,8 +1019,20 @@ async function emptyBox(el, icon, title, sub) {
 }
 
 /* ── 10 · HOME ──────────────────────────────────────────────────── */
-function kpi(label, value, sub, tone) {
-  return `<div class="kpi" data-tone="${esc(tone || '')}"><span class="k-l">${esc(label)}</span><span class="k-v">${value}</span><span class="k-s">${esc(sub || '')}</span></div>`;
+/* v11: optional `spark` — array of real numeric samples (e.g. 24 hourly buckets);
+   drawn as an inline SVG strip. Never fabricated: no data, no spark. */
+function kpiSpark(vals) {
+  const v = (vals || []).filter((x) => typeof x === 'number' && isFinite(x));
+  if (v.length < 2) return '';
+  const max = Math.max(...v), min = Math.min(...v);
+  const W = 100, H = 26, PAD = 2, rng = (max - min) || 1;
+  const pt = (i) => [(i / (v.length - 1)) * W, H - PAD - ((v[i] - min) / rng) * (H - 2 * PAD)];
+  const line = v.map((_, i) => `${i ? 'L' : 'M'}${pt(i)[0].toFixed(1)} ${pt(i)[1].toFixed(1)}`).join(' ');
+  const area = `M0 ${H} ` + v.map((_, i) => `L${pt(i)[0].toFixed(1)} ${pt(i)[1].toFixed(1)}`).join(' ') + ` L${W} ${H} Z`;
+  return `<svg class="k-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><path class="sp-area" d="${area}"/><path class="sp-line" d="${line}"/></svg>`;
+}
+function kpi(label, value, sub, tone, spark) {
+  return `<div class="kpi" data-tone="${esc(tone || '')}"><span class="k-l">${esc(label)}</span><span class="k-v">${value}</span><span class="k-s">${esc(sub || '')}</span>${kpiSpark(spark)}</div>`;
 }
 function paintPauseBar(paused) {
   const bar = $('#pauseBar');
@@ -1076,15 +1100,19 @@ function cloudBanner(cs) {
 }
 loaders.home = async () => {
   api('/api/persist/status').then(cloudBanner).catch(() => {});
-  const [ov, logs, pw] = await Promise.all([api('/api/overview'), api('/api/logs?limit=10'), api('/api/power').catch(() => null)]);
+  const [ov, logs, pw, hourly] = await Promise.all([api('/api/overview'), api('/api/logs?limit=10'), api('/api/power').catch(() => null), api('/api/overview/hourly').catch(() => null)]);
+  /* v11: KPI sparklines use the REAL hourly outcome buckets (no fabricated history) */
+  const hB = (hourly && hourly.buckets) || [];
+  const hPub = hB.map((b) => b.published || 0);
+  const hFail = hB.map((b) => b.failed || 0);
   const wa = ov.wa || {};
   paintPauseBar(Boolean(ov.mirrorPaused));
   const nextJob = ((pw && pw.scheduler) || []).filter((j) => j.enabled).sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
   /* 5J (J5): KPIs are draggable — the order is saved (ui.kpi.order) */
   const kpiDefs = [
     ['wa', kpi('WhatsApp', STATUS_TEXT[wa.status] || esc(wa.status), wa.phone ? '+' + esc(wa.phone) : (wa.detail || ''), wa.status === 'open' ? 'ok' : wa.status === 'qr' ? 'err' : '')],
-    ['published', kpi('Published today', ov.today.published, (ov.today.skipped || 0) + ' skipped', 'accent')],
-    ['failed', kpi('Failed today', ov.today.failed, ov.today.failed ? 'needs attention' : 'all clean', ov.today.failed ? 'err' : 'ok')],
+    ['published', kpi('Published today', ov.today.published, (ov.today.skipped || 0) + ' skipped', 'accent', hPub)],
+    ['failed', kpi('Failed today', ov.today.failed, ov.today.failed ? 'needs attention' : 'all clean', ov.today.failed ? 'err' : 'ok', hFail)],
     ['sources', kpi('Sources', ov.sources, ov.targets + ' target(s)')],
     ['nextjob', kpi('Next scheduled post', nextJob ? when(nextJob.at) : '—', nextJob ? (nextJob.name || 'untitled') : 'none queued')],
     /* 5A (R46): mirror latency — how long a post takes from source publish to our publish */
@@ -1660,18 +1688,42 @@ let __queueTab = 'approvals';
     btn.disabled = false;
   });
 })();
+/* v11 · Signal Desk queue card — source letter-square + target chips (mockup 03).
+   Behavior unchanged: same data-q actions, same edit/retry wiring below. */
+function sourceName(jid) {
+  return String((window.__dirNames && window.__dirNames[jid]) || (jid ? shortJid(jid) : '') || '—');
+}
+function initialsOf(name) {
+  const words = String(name).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '?';
+  return (words.length >= 2 ? words[0][0] + words[1][0] : String(name).slice(0, 2)).toUpperCase();
+}
 function queueItemRow(q, live) {
+  const nm = q.source_jid ? sourceName(q.source_jid) : '—';
   const hold = q.hold_until ? ` · holds until ${when(q.hold_until)}` : '';
   const media = q.media_kind ? ` <span class="b b-info">${esc(q.media_kind)}</span>` : '';
+  /* mockup 03: "N targets" chip — the real names live in the hover title */
+  const tgs = String(q.targets || '').split(',').map((x) => x.trim()).filter(Boolean);
+  const tNames = tgs.map(sourceName);
+  const tChips = tgs.length
+    ? `<div class="q-targets"><span class="q-tchip" title="${esc(tNames.join(', '))}">${tgs.length} target${tgs.length > 1 ? 's' : ''}</span></div>`
+    : '';
   return `
   <div class="q-item" data-qid="${q.id}">
-    <div class="q-top"><b>${esc(q.source_jid ? shortJid(q.source_jid) : '—')}</b>${media}<span class="muted tiny">${when(q.created_at)}${hold}</span>
-      <span class="q-acts">
-        ${live ? '' : `<button class="btn btn-sm btn-p" data-q="approve">Approve</button><button class="btn btn-sm" data-q="edit">Edit</button><button class="btn btn-sm btn-d" data-q="reject">Reject</button>`}
-        ${q.status === 'failed' ? '<button class="btn btn-sm" data-q="retry">Retry</button><button class="btn btn-sm" data-q="dismiss">Dismiss</button>' : ''}
-      </span>
+    <div class="q-card">
+      <span class="q-avatar" aria-hidden="true">${esc(initialsOf(nm))}</span>
+      <div style="min-width:0">
+        <div class="q-top">
+          <span class="q-src"><b>${esc(nm)}</b>${media}</span><span class="q-when muted tiny">${when(q.created_at)}${hold}</span>
+          <span class="q-acts">
+            ${live ? '' : `<button class="btn btn-sm btn-p" data-q="approve">Approve</button><button class="btn btn-sm" data-q="edit">Edit</button><button class="btn btn-sm btn-d" data-q="reject">Discard</button>`}
+            ${q.status === 'failed' ? '<button class="btn btn-sm" data-q="retry">Retry</button><button class="btn btn-sm" data-q="dismiss">Dismiss</button>' : ''}
+          </span>
+        </div>
+        ${tChips}
+        <div class="q-text">${esc(String(q.text || '').slice(0, 400))}${String(q.text || '').length > 400 ? '…' : ''}${q.note ? `<div class="muted tiny q-note">${esc(q.note)}</div>` : ''}</div>
+      </div>
     </div>
-    <div class="q-text">${esc(String(q.text || '').slice(0, 400))}${String(q.text || '').length > 400 ? '…' : ''}${q.note ? `<div class="muted tiny q-note">${esc(q.note)}</div>` : ''}</div>
   </div>`;
 }
 function wireQueueRows(box) {
@@ -1717,6 +1769,30 @@ loaders.approvals = async () => {
   $('#queueDelay').value = d.delayMin || 0;
   $('#pendingCount').textContent = pending.length;
   const list = $('#queueList');
+  /* v11 · mockup 03: filter chips with REAL counts (pending = ready now, held = in delay buffer);
+     filtering is client-side on the rendered rows — no re-fetch, nothing lost */
+  const nowMs = Date.now();
+  const isHeld = (q) => Boolean(q.hold_until) && new Date(q.hold_until).getTime() > nowMs;
+  const nHeld = pending.filter(isHeld).length;
+  const nReady = pending.length - nHeld;
+  const chipsBox = $('#queueChips');
+  if (chipsBox) {
+    const pad2 = (n) => String(n).padStart(2, '0');
+    chipsBox.innerHTML = [
+      ['all', `All · ${pad2(pending.length)}`],
+      ['ready', `Pending · ${pad2(nReady)}`],
+      ['held', `Held · ${pad2(nHeld)}`]
+    ].map(([k, l], i) => `<button class="qchip${i === 0 ? ' on' : ''}" data-qf="${k}" title="${k === 'held' ? 'Waiting in the delay buffer' : k === 'ready' ? 'Ready for your decision now' : 'Everything in the queue'}">${l}</button>`).join('');
+    $$('#queueChips .qchip').forEach((b) => b.addEventListener('click', () => {
+      $$('#queueChips .qchip').forEach((x) => x.classList.toggle('on', x === b));
+      const f = b.dataset.qf;
+      $$('#queueList .q-item').forEach((el) => {
+        const q = pending.find((x) => String(x.id) === el.dataset.qid);
+        const held = q ? isHeld(q) : false;
+        el.hidden = f === 'held' ? !held : (f === 'ready' ? held : false);
+      });
+    }));
+  }
   if (pending.length) {
     list.innerHTML = pending.map((q) => queueItemRow(q, false)).join('');
     pending.forEach((q) => { const el = list.querySelector(`[data-qid="${q.id}"]`); if (el) el.__text = q.text; });
@@ -5304,7 +5380,6 @@ loaders.routing = async () => {
 
 /* J9 — About: version, changelog, last boot, storage */
 const CHANGELOG = [
-  ['v10.0.0 — Slate Console (this build)', 'The presentation layer, rebuilt from scratch — nothing behind it moved. A disciplined LIGHT operations console: cool-neutral canvas (#F5F6F8), white cards, hairline borders and zero shadows, ONE indigo accent (#4F46E5), an 8-pt spacing grid, tabular numerals on every data cell, and a dark variant behind the same toggle. Flatter information architecture: the sidebar is six groups over the same 25 screens — Command (Home, Compose, Queue, Scheduled, History, Bulk), Channels (Sources, Targets, Discover, Routing), People (WhatsApp Inbox, Contacts, Auto-replies), Studio (Library, Brand, AI Pilot, Rules), Monitor (Analytics, Reports & Digest, Health, Logs, Audit), System (Email, Settings, About) — with collapsible groups, a 64 px icon rail, and a 232 px rail of plain text labels. The top bar is one strong title, the Ctrl K search, a live WhatsApp status chip, the bell and the red Panic. Home is data-first: a four-cell status band (WhatsApp · Panic · Pacing · Cloud memory), the time-of-day greeting, the pause bar, KPI cards, the real 24-hour activity chart and the Recent activity feed, with Queue and Health beside it. Settings keeps exactly five sections under short names — General, Delivery, Integrations, Security, Data. WhatsApp mirror stays byte-identical, LTR, official. The backend, APIs, database, WhatsApp auth/QR, automation, all 33 switches and every saved setting are untouched'],
   ['v9.1.0 — Reference layout (this build)', 'Full integration of the delivered reference design: top bar is now a breadcrumb (GROUP / Screen) with a live connection pill, labeled Panic stop and a wide Search anything field (Ctrl K). Sidebar: rotated R brand mark with the SIGNAL DESK sub-line, a one-line 8/8 health readout, the WhatsApp paired-identity card, the panic-stop status with the Esc key hint, and the workspace-owner row with inline help + theme controls. Home: COMMAND / OVERVIEW eyebrow, time-of-day greeting, LIVE badge, a real 24-hour activity chart (hourly published / skipped / failed, Pakistan time, new read-only /api/overview/hourly route), queue status, system health ring and adaptive pacing panels. Settings: exactly five sections in reference order — Workspace & language (bot name, language, theme as Dark / Light / System pills), Delivery controls, Integrations & reports, Security & sessions, Data & recovery; multi-group tabs now show every group they cover. All 25 screens, all 33 switches, the pipeline, WhatsApp pairing and settings persistence are unchanged'],
   ['v9.0.0 — Signal Desk', 'Full redesign from the delivered product spec + 8 mockups. Olive-black console (#10130F) on a four-step olive surface ladder · one citron accent (#D7F36A) · NO shadows anywhere (borders + surface steps only) · Noto Sans Arabic variable 400–700, self-hosted, one family for EN + UR. New eight-group IA (Command · Broadcast · Channels · People · Studio · Intelligence · Insights · System) — all 25 screens live in the sidebar, no inner-tab row · 64 px top bar · 248 px sidebar (72 px rail on tablet) · 1440 px canvas. Phone: 5-item bottom bar with the raised 56 px citron Compose. Spec component refresh: 42 px inputs, 40 px buttons, 42×24 switches, 112 px KPIs with a 3×24 citron rule, 22 px status pills, 56 px table rows, 160 ms switch motion. Read-only switch chips ("Label · Off ↗") on Home/Compose/History — state + deep link, never a second control. Light theme (#F4F6EF, accent #5E7C19) · Urdu RTL shell (inbox stays LTR) · WhatsApp mirror byte-identical · pipeline untouched · REPO-SLIM hotfix: media of ANY size is saved (the old 450 KB / 5 MB caps are gone) — and the media of any post is deleted right after it is published to the target channel, so nothing accumulates; WhatsApp-tab photos live on disk instead of inside the database (a 30-day safety net for unposted media, Settings → Storage), the cloud login syncs only when something actually changes (idle = zero GitHub writes), and one click "Compacts" the backup branch to a single snapshot so the GitHub repo stops growing'],
   ['v8.5.0 — Graphite', 'The visual system, rebuilt from scratch: Geist typeface (self-hosted) · warm graphite surfaces · monochrome system with off-white primary actions · one warm accent, deployed scarcely · hairlines + inner top-edge light, no card shadows in dark · refined buttons, switches, tables, KPIs, command palette, modals, toasts · light theme with tint elevation · WhatsApp mirror untouched'],
