@@ -19,6 +19,8 @@
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+/* v1.1: display-only fix for the library's "QR refs" typo (internal matching in wa.js untouched) */
+const fixDetail = (s) => String(s == null ? '' : s).replace(/QR refs/gi, 'QR refresh');
 /* a channel name must never render as a raw number */
 const jidPrettify = (name, jid) => {
   const j = String(jid || '');
@@ -246,19 +248,16 @@ const LEGACY_VIEWS = {
 };
 /* every view maps to one of the eight Signal Desk groups (spec §1.3). Drives sidebar state. */
 const AREA = {
-  home: 'command',
-  newpost: 'broadcast', approvals: 'broadcast', scheduled: 'broadcast', posts: 'broadcast', bulk: 'broadcast',
-  sources: 'channels', targets: 'channels', browse: 'channels', routing: 'channels',
-  whatsapp: 'people', journal: 'people', aireply: 'people',
-  media: 'studio', branding: 'studio',
-  aipilot: 'intelligence', guardrails: 'intelligence',
-  analytics: 'insights', digest: 'insights', health: 'insights', logs: 'insights', audit: 'insights',
-  email: 'system', settings: 'system', about: 'system'
+  home: 'overview', analytics: 'overview', digest: 'overview',
+  newpost: 'publish', approvals: 'publish', scheduled: 'publish', posts: 'publish', bulk: 'publish', media: 'publish',
+  sources: 'channels', targets: 'channels', browse: 'channels', routing: 'channels', guardrails: 'channels',
+  whatsapp: 'audience', journal: 'audience', aireply: 'audience', aipilot: 'audience',
+  branding: 'system', health: 'system', logs: 'system', audit: 'system', email: 'system', settings: 'system', about: 'system'
 };
 /* Reference top-bar breadcrumb labels (one per group) */
 const GROUP_LABEL = {
-  command: 'COMMAND', broadcast: 'BROADCAST', channels: 'CHANNELS', people: 'PEOPLE',
-  studio: 'STUDIO', intelligence: 'INTELLIGENCE', insights: 'INSIGHTS', system: 'SYSTEM'
+  overview: 'OVERVIEW', publish: 'PUBLISHING & CONTENT', channels: 'CHANNELS & ROUTING',
+  audience: 'AUDIENCE & AUTOMATION', system: 'SYSTEM & WORKSPACE'
 };
 const loaders = {};
 let currentView = 'home';
@@ -267,15 +266,19 @@ function show(view) {
   if (!TITLES[view]) return;
   currentView = view;
   $$('.view').forEach((v) => { v.hidden = v.dataset.view !== view; });
-  const area = AREA[view] || 'home';
-  /* Signal Desk: the active screen carries the 3px citron rail; its group header stays flagged */
-  $$('#sidebar .sb-item').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
+  const area = AREA[view] || 'overview';
+  /* v1.1: merged nav items (data-views family) stay lit across their tabs; in-view tab rows track too */
+  $$('#sidebar .sb-item').forEach((a) => {
+    const fam = a.dataset.views ? a.dataset.views.split(',') : null;
+    a.classList.toggle('on', fam ? fam.includes(view) : a.dataset.view === view);
+  });
   $$('#sidebar .sb-group').forEach((g) => g.classList.toggle('on', g.dataset.group === area));
+  $$('.vtab').forEach((t) => t.classList.toggle('on', t.dataset.go === view));
   $$('.bt').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
   $('#viewTitle').textContent = TITLES[view];
   /* Reference top bar: breadcrumb = GROUP / Screen */
   const cg = $('#crumbGroup');
-  if (cg) cg.textContent = (GROUP_LABEL[AREA[view] || 'command'] || 'COMMAND');
+  if (cg) cg.textContent = (GROUP_LABEL[area] || 'OVERVIEW');
   $('#app').classList.remove('side-open');
   const content = $('#content');
   if (content) content.scrollTop = 0;
@@ -312,6 +315,12 @@ $$('.sb-item').forEach((a) => {
   a.addEventListener('click', go);
   a.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); } });
 });
+/* v1.1: in-view tab rows on merged screens (reuse the same router) */
+$$('.vtab').forEach((t) => {
+  const go = () => show(t.dataset.go);
+  t.addEventListener('click', go);
+  t.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); go(); } });
+});
 $$('.bt').forEach((a) => a.addEventListener('click', () => {
   const v = a.dataset.view;
   if (v === '__publish') {
@@ -319,7 +328,7 @@ $$('.bt').forEach((a) => a.addEventListener('click', () => {
     let last = 'newpost';
     try {
       const saved = localStorage.getItem('rc-view');
-      if (saved && AREA[saved] === 'content' && TITLES[saved]) last = saved;
+      if (saved && AREA[saved] === 'publish' && TITLES[saved]) last = saved;
     } catch (e) {}
     show(last);
     return;
@@ -363,17 +372,19 @@ async function pollStatus() {
     const st = await api('/api/status');
     window.__waStatus = st.status;
     if (window.__updateWaGates) window.__updateWaGates(st.status);
+    /* v1.1: the duplicate badge was merged into the unified connection pill — keep the binding null-safe */
     const b = $('#waBadge');
-    b.dataset.s = st.status;
-    $('#waBadgeText').textContent = STATUS_TEXT[st.status] || st.status;
-    /* the badge now doubles as the connection pill's state — shown only when NOT linked */
-    b.hidden = st.status === 'open';
+    if (b) {
+      b.dataset.s = st.status;
+      const bt = $('#waBadgeText'); if (bt) bt.textContent = STATUS_TEXT[st.status] || st.status;
+      b.hidden = st.status === 'open';
+    }
     if (window.__sdConnState) window.__sdConnState(st.status);
     if (window.__sdSideHealth) window.__sdSideHealth(st.status);
     const qrCard = $('#qrCard');
     if (st.status === 'qr') {
       qrCard.hidden = false;
-      $('#qrDetail').textContent = st.detail || 'Scan the QR with WhatsApp → Linked devices';
+      $('#qrDetail').textContent = fixDetail(st.detail || 'Scan the QR with WhatsApp → Linked devices');
       const qr = await api('/api/qr');
       if (qr.qr) $('#qrImg').src = qr.qr;
     } else if (st.status === 'open') {
@@ -401,6 +412,16 @@ setInterval(pollStatus, 30000);
     if (s) s.textContent = status === 'open' ? 'Owner identity · Linked once' : 'Link from Home — one scan, never again';
     if (pd) pd.dataset.s = status;
   };
+  /* v1.1: unified connection pill — one control, not two. Click → the QR (or the inbox when linked) */
+  const __pill = $('#connPill');
+  if (__pill) __pill.addEventListener('click', () => {
+    if (window.__waStatus === 'open') { show('whatsapp'); return; }
+    show('home');
+    const q = $('#qrCard');
+    if (q) q.hidden = false;
+    setTimeout(() => { if (q && q.isConnected) q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
+    api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
+  });
   let __healthCache = null;
   window.__sdSideHealth = async (status) => {
     const dot = $('#sideHealthDot'); if (dot) dot.dataset.s = status;
@@ -416,9 +437,11 @@ setInterval(pollStatus, 30000);
       const passed = parts.filter((p) => (p.score || 0) >= 80).length;
       const score = (h && typeof h.score === 'number') ? h.score : (parts.length ? Math.round(parts.reduce((a, p) => a + (p.score || 0), 0) / parts.length) : 0);
       const txt = $('#sideHealthTxt'), cnt = $('#sideHealthCount');
-      if (txt) txt.textContent = score >= 80 ? 'All systems healthy' : (score >= 50 ? 'Some checks degraded' : 'Attention needed');
+      /* v1.1: "healthy" only when ALL checks pass — 5/8 says "3 systems need attention" */
+      const nBad = (parts.length || 8) - passed;
+      if (txt) txt.textContent = nBad === 0 ? 'All systems healthy' : `${nBad} system${nBad === 1 ? '' : 's'} need${nBad === 1 ? 's' : ''} attention`;
       if (cnt) cnt.textContent = `${passed}/${parts.length || 8}`;
-      const d2 = $('#sideHealthDot'); if (d2) d2.dataset.h = score >= 80 ? 'ok' : (score >= 50 ? 'warn' : 'err');
+      const d2 = $('#sideHealthDot'); if (d2) d2.dataset.h = nBad === 0 ? 'ok' : (nBad <= Math.ceil((parts.length || 8) / 2) ? 'warn' : 'err');
     }
   };
   /* Home greeting by hour of day (owner name comes from the sidebar user row) */
@@ -1034,18 +1057,41 @@ function kpiSpark(vals) {
 function kpi(label, value, sub, tone, spark) {
   return `<div class="kpi" data-tone="${esc(tone || '')}"><span class="k-l">${esc(label)}</span><span class="k-v">${value}</span><span class="k-s">${esc(sub || '')}</span>${kpiSpark(spark)}</div>`;
 }
-function paintPauseBar(paused) {
+/* v1.1: mutually exclusive, accurate states — a disconnected WhatsApp can never claim "running" */
+function paintPauseBar(paused, waStatus) {
   const bar = $('#pauseBar');
-  bar.classList.toggle('paused', paused);
-  $('#pauseHead').textContent = paused ? 'Mirroring is PAUSED.' : 'Mirroring is running.';
-  $('#pauseSub').textContent = paused
-    ? 'No posts are published while paused. Nothing is lost — missed posts are recovered when you resume.'
-    : 'Every source → every target, automatically.';
-  const btn = $('#pauseBtn');
-  btn.className = 'btn ' + (paused ? 'btn-p' : 'btn-d');
-  ico(paused ? 'play' : 'pause').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>' + (paused ? 'Resume mirroring' : 'Pause all mirroring') + '</span>'; });
+  const unlinked = waStatus !== undefined && waStatus !== 'open';
+  bar.classList.toggle('paused', Boolean(paused));
+  bar.classList.toggle('wa-off', unlinked);
+  const head = $('#pauseHead'), sub = $('#pauseSub'), btn = $('#pauseBtn');
+  if (unlinked) {
+    head.textContent = 'Mirroring paused — WhatsApp disconnected.';
+    sub.textContent = 'Link WhatsApp to start mirroring — one scan, and it is never needed again.';
+    btn.dataset.mode = 'link';
+    btn.className = 'btn btn-p';
+    ico('chat').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Connect WhatsApp via QR</span>'; });
+  } else if (paused) {
+    head.textContent = 'Mirroring is PAUSED.';
+    sub.textContent = 'No posts are published while paused. Nothing is lost — missed posts are recovered when you resume.';
+    btn.dataset.mode = 'pause';
+    btn.className = 'btn btn-p';
+    ico('play').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Resume mirroring</span>'; });
+  } else {
+    head.textContent = 'Mirroring is running.';
+    sub.textContent = 'Every source → every target, automatically.';
+    btn.dataset.mode = 'pause';
+    btn.className = 'btn btn-d';
+    ico('pause').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Pause all mirroring</span>'; });
+  }
 }
 $('#pauseBtn').addEventListener('click', async () => {
+  const btn = $('#pauseBtn');
+  if (btn.dataset.mode === 'link') {
+    const q = $('#qrCard');
+    if (q) { q.hidden = false; q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
+    return;
+  }
   const next = !$('#pauseBar').classList.contains('paused');
   if (next) {
     const ok = await confirmModal('Pause all mirroring?', 'Sources stay subscribed — nothing is published until you resume. Missed posts are recovered when you resume.', 'Pause', true);
@@ -1053,7 +1099,7 @@ $('#pauseBtn').addEventListener('click', async () => {
   }
   try {
     const r = await api('/api/mirror/pause', { method: 'POST', body: { paused: next } });
-    paintPauseBar(r.paused);
+    paintPauseBar(r.paused, window.__waStatus || 'open');
     toast(r.paused ? 'Mirroring paused' : 'Mirroring resumed — recovering missed posts', r.paused ? '' : 'ok');
   } catch (e) { toast(e.message, 'err'); }
 });
@@ -1089,14 +1135,17 @@ function cloudBanner(cs) {
     cloudTestWire(box);
     return;
   }
-  const whenTxt = cs.lastSyncAt ? when(cs.lastSyncAt) : 'not synced yet (first save ~30 s after boot)';
-  const bad = cs.lastError ? `<div class="muted tiny" style="color:var(--err);margin-top:4px">Last sync error: ${esc(cs.lastError)} — press “Test cloud memory” for the exact reason and the fix.</div>` : '';
-  box.innerHTML = `<div class="card cloud-note">
-    <b>Cloud memory is ON</b> <span class="muted tiny">— ${esc(cs.repoUsed || cs.repo)} · branch ${esc(cs.branch)} · every ${cs.intervalMin} min + right after pairing + on every deploy</span>
-    <div class="muted tiny" style="margin-top:4px">Last save: ${esc(whenTxt)}${cs.lastKB ? ` (${cs.lastKB} KB)` : ''}${cs.credsPresent ? ' · saved login detected' : ' · no saved login yet — scan one QR and it is stored automatically'}</div>${bad}
-    <div style="margin-top:8px"><button class="btn btn-sm" id="cloudTest">Test cloud memory</button></div>
-    <div id="cloudVerdict" class="tiny" style="margin-top:6px"></div></div>`;
-  cloudTestWire(box);
+  /* v1.1: clean badge in the banner — repo/branch/interval detail moves to the tooltip */
+  const whenTxt = cs.lastSyncAt ? when(cs.lastSyncAt) : 'not synced yet';
+  const tip = (cs.repoUsed || cs.repo) + ' · branch ' + cs.branch + ' · saves every ' + cs.intervalMin + ' min + right after pairing + on every deploy' +
+    (cs.lastKB ? ' · last snapshot ' + cs.lastKB + ' KB' : '') +
+    (cs.credsPresent ? ' · saved login detected' : ' · no saved login yet — scan one QR and it is stored automatically') +
+    (cs.lastError ? ' · last sync error: ' + cs.lastError : '');
+  const synced = cs.lastSyncAt ? 'Synced' : 'Armed';
+  ico('cloud').then((svg) => {
+    box.innerHTML = `<span class="cloud-badge-row"><span class="cloud-badge${cs.lastError ? ' cb-err' : ''}" title="${esc(tip)}">${svg}<b>Cloud Memory ${synced}</b><span class="cb-time">· Last saved ${esc(whenTxt)}</span>${cs.lastError ? '<i class="cb-err-dot"></i>' : ''}</span><button class="btn btn-sm btn-g" id="cloudTest">Test</button><span id="cloudVerdict" class="tiny"></span></span>`;
+    cloudTestWire(box);
+  });
 }
 loaders.home = async () => {
   api('/api/persist/status').then(cloudBanner).catch(() => {});
@@ -1106,11 +1155,11 @@ loaders.home = async () => {
   const hPub = hB.map((b) => b.published || 0);
   const hFail = hB.map((b) => b.failed || 0);
   const wa = ov.wa || {};
-  paintPauseBar(Boolean(ov.mirrorPaused));
+  paintPauseBar(Boolean(ov.mirrorPaused), wa.status);
   const nextJob = ((pw && pw.scheduler) || []).filter((j) => j.enabled).sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
   /* 5J (J5): KPIs are draggable — the order is saved (ui.kpi.order) */
   const kpiDefs = [
-    ['wa', kpi('WhatsApp', STATUS_TEXT[wa.status] || esc(wa.status), wa.phone ? '+' + esc(wa.phone) : (wa.detail || ''), wa.status === 'open' ? 'ok' : wa.status === 'qr' ? 'err' : '')],
+    ['wa', kpi('WhatsApp', STATUS_TEXT[wa.status] || esc(wa.status), wa.phone ? '+' + esc(wa.phone) : fixDetail(wa.detail || ''), wa.status === 'open' ? 'ok' : wa.status === 'qr' ? 'err' : '')],
     ['published', kpi('Published today', ov.today.published, (ov.today.skipped || 0) + ' skipped', 'accent', hPub)],
     ['failed', kpi('Failed today', ov.today.failed, ov.today.failed ? 'needs attention' : 'all clean', ov.today.failed ? 'err' : 'ok', hFail)],
     ['sources', kpi('Sources', ov.sources, ov.targets + ' target(s)')],
@@ -1122,6 +1171,35 @@ loaders.home = async () => {
   const orderIdx = (id) => { const i = savedOrder.indexOf(id); return i >= 0 ? i : 99; };
   $('#kpiGrid').innerHTML = kpiDefs.slice().sort((a, b) => orderIdx(a[0]) - orderIdx(b[0])).map(([id, html]) => html.replace('<div class="kpi"', `<div class="kpi kpi-drag" draggable="true" data-kpi="${id}" title="Drag to reorder — the order is saved"`)).join('');
   wireKpiDrag();
+  /* v1.1: actionable empty states — a CTA inside the card instead of a dead-end zero (reuses the existing flows) */
+  try {
+    if (wa.status !== 'open') {
+      const kEl = $('#kpiGrid .kpi[data-kpi="wa"]');
+      if (kEl) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'btn btn-p btn-sm kpi-cta';
+        if (wa.status === 'connecting') { b.textContent = 'Connecting…'; b.disabled = true; }
+        else {
+          b.textContent = 'Connect WhatsApp via QR';
+          b.addEventListener('click', () => {
+            const q = $('#qrCard');
+            if (q) { q.hidden = false; q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+            api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
+          });
+        }
+        kEl.appendChild(b);
+      }
+    }
+    if (!(ov.sources > 0)) {
+      const kEl = $('#kpiGrid .kpi[data-kpi="sources"]');
+      if (kEl) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.className = 'btn btn-p btn-sm kpi-cta'; b.textContent = 'Add first source';
+        b.addEventListener('click', () => show('sources'));
+        kEl.appendChild(b);
+      }
+    }
+  } catch (e) { /* CTAs are progressive enhancement */ }
   /* 5E (R74/R73): adaptive-pacing + panic status strip on the dashboard */
   paintPaceStrip(ov);
   /* 5J (J2): setup wizard — progress is SAVED (ui.setup.done); auto-hides once
@@ -5497,13 +5575,11 @@ function applyLang(lang) {
   if (moreScrim) {
     /* Signal Desk: everything not in the five bottom slots, grouped by the eight IA groups */
     const areas = [
-      ['Broadcast', ['scheduled', 'posts', 'bulk']],
-      ['Channels', ['targets', 'browse', 'routing']],
-      ['People', ['whatsapp', 'journal', 'aireply']],
-      ['Studio', ['media', 'branding']],
-      ['Intelligence', ['aipilot', 'guardrails']],
-      ['Insights', ['analytics', 'digest', 'health', 'logs', 'audit']],
-      ['System', ['email', 'settings', 'about']]
+      ['Overview', ['analytics', 'digest']],
+      ['Publishing & Content', ['scheduled', 'posts', 'bulk', 'media']],
+      ['Channels & Routing', ['targets', 'browse', 'routing', 'guardrails']],
+      ['Audience & Automation', ['whatsapp', 'journal', 'aireply', 'aipilot']],
+      ['System & Workspace', ['branding', 'health', 'logs', 'audit', 'email', 'settings', 'about']]
     ];
     $('#moreList').innerHTML = areas.map(([name, vs]) =>
       `<div class="more-g">${name}</div>` + vs.map((v) => `<button class="more-it" data-mv="${v}">${TITLES[v] || v}</button>`).join('')).join('');

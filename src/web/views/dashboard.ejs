@@ -24,7 +24,7 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=s12">
+<link rel="stylesheet" href="/app.css?v=s13">
 </head>
 <body>
 <div class="app" id="app">
@@ -44,68 +44,60 @@ try {
       <button class="icon-btn sb-collapse" id="sbCollapse" title="Collapse sidebar" aria-label="Collapse sidebar"><%- icon('menu','icon icon-sm') %></button>
     </div>
     <!-- Reference: one-line health state under the brand (full report: Insights · Health) -->
-    <div class="side-health" id="sideHealth" title="Eight operational checks — full report in Insights · Health">
+    <div class="side-health" id="sideHealth" title="Eight operational checks — full report in System Health & Logs">
       <span class="health-dot" id="sideHealthDot"></span><span id="sideHealthTxt">Checking…</span><span class="health-count" id="sideHealthCount">—/8</span>
     </div>
     <nav class="sb-areas" aria-label="Areas">
-      <!-- Signal Desk IA (product spec §1.3) — eight groups, 25 screens, nothing removed -->
-      <div class="sb-group" data-group="command" aria-label="Command"><span class="g-txt">Command</span></div>
-      <div class="sb-items" id="gCommandItems">
-        <button class="sb-item" data-top="command" data-view="home" data-lbl="Home" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">H</span><span class="lbl">Home</span></button>
-      </div>
-      <div class="sb-group" data-group="broadcast" aria-label="Broadcast"><span class="g-txt">Broadcast</span></div>
-      <div class="sb-items" id="gBroadcastItems">
-        <button class="sb-item" data-top="broadcast" data-view="newpost" data-lbl="Compose" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">C</span><span class="lbl">Compose</span></button>
-        <button class="sb-item" data-top="broadcast" data-view="approvals" data-lbl="Queue" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">Q</span><span class="lbl">Queue</span></button>
-        <button class="sb-item" data-top="broadcast" data-view="scheduled" data-lbl="Scheduled" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">S</span><span class="lbl">Scheduled</span></button>
-        <button class="sb-item" data-top="broadcast" data-view="posts" data-lbl="History" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">H</span><span class="lbl">History</span></button>
-        <button class="sb-item" data-top="broadcast" data-view="bulk" data-lbl="Bulk Send" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">B</span><span class="lbl">Bulk Send</span></button>
-      </div>
-      <div class="sb-group" data-group="channels" aria-label="Channels"><span class="g-txt">Channels</span></div>
-      <div class="sb-items" id="gChannelsItems">
-        <button class="sb-item" data-top="channels" data-view="sources" data-lbl="Sources" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">S</span><span class="lbl">Sources</span></button>
-        <button class="sb-item" data-top="channels" data-view="targets" data-lbl="Targets" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">T</span><span class="lbl">Targets</span></button>
-        <button class="sb-item" data-top="channels" data-view="browse" data-lbl="Discover" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">D</span><span class="lbl">Discover</span></button>
-        <button class="sb-item" data-top="channels" data-view="routing" data-lbl="Routing" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">R</span><span class="lbl">Routing</span></button>
-      </div>
-      <div class="sb-group" data-group="people" aria-label="People"><span class="g-txt">People</span></div>
-      <div class="sb-items" id="gPeopleItems">
-        <button class="sb-item" data-top="people" data-view="whatsapp" data-lbl="WhatsApp Inbox" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">W</span><span class="lbl">WhatsApp Inbox</span></button>
-        <button class="sb-item" data-top="people" data-view="journal" data-lbl="Contacts" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">C</span><span class="lbl">Contacts</span></button>
-        <button class="sb-item" data-top="people" data-view="aireply" data-lbl="Auto-replies" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">Auto-replies</span></button>
-      </div>
-      <div class="sb-group" data-group="studio" aria-label="Studio"><span class="g-txt">Studio</span></div>
-      <div class="sb-items" id="gStudioItems">
-        <button class="sb-item" data-top="studio" data-view="media" data-lbl="Library" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">L</span><span class="lbl">Library</span></button>
-        <button class="sb-item" data-top="studio" data-view="branding" data-lbl="Brand" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">B</span><span class="lbl">Brand</span></button>
-      </div>
-      <div class="sb-group" data-group="intelligence" aria-label="Intelligence"><span class="g-txt">Intelligence</span></div>
-      <div class="sb-items" id="gIntelligenceItems">
-        <button class="sb-item" data-top="intelligence" data-view="aipilot" data-lbl="AI Pilot" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">AI</span><span class="lbl">AI Pilot</span></button>
-        <button class="sb-item" data-top="intelligence" data-view="guardrails" data-lbl="Rules" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">R</span><span class="lbl">Rules</span></button>
-      </div>
-      <div class="sb-group" data-group="insights" aria-label="Insights"><span class="g-txt">Insights</span></div>
-      <div class="sb-items" id="gInsightsItems">
-        <button class="sb-item" data-top="insights" data-view="analytics" data-lbl="Analytics" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">Analytics</span></button>
-        <button class="sb-item" data-top="insights" data-view="digest" data-lbl="Reports & Digest" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">R</span><span class="lbl">Reports & Digest</span></button>
-        <button class="sb-item" data-top="insights" data-view="health" data-lbl="Health" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">H</span><span class="lbl">Health</span></button>
-        <button class="sb-item" data-top="insights" data-view="logs" data-lbl="Logs" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">L</span><span class="lbl">Logs</span></button>
-        <button class="sb-item" data-top="insights" data-view="audit" data-lbl="Audit" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">Audit</span></button>
-      </div>
-      <div class="sb-group" data-group="system" aria-label="System"><span class="g-txt">System</span></div>
-      <div class="sb-items" id="gSystemItems">
-        <button class="sb-item" data-top="system" data-view="email" data-lbl="Email" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">E</span><span class="lbl">Email</span></button>
-        <button class="sb-item" data-top="system" data-view="settings" data-lbl="Settings" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">S</span><span class="lbl">Settings</span></button>
-        <button class="sb-item" data-top="system" data-view="about" data-lbl="About" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true">A</span><span class="lbl">About</span></button>
-      </div>
-    </nav>
+      <!-- v1.1 IA: five collapsible categories; merged items open their first tab (data-views family). All 25 screens reachable. -->
+      <details class="sb-acc" open>
+        <summary class="sb-group" data-group="overview" aria-label="Overview"><span class="g-txt">Overview</span><span class="sb-acc-chev" aria-hidden="true"><%- icon('chev-down') %></span></summary>
+        <div class="sb-items">
+        <button class="sb-item" data-view="home" data-lbl="Home" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('layout-dashboard') %></span><span class="lbl">Home</span></button>
+        <button class="sb-item" data-views="analytics,digest" data-view="analytics" data-lbl="Analytics & Reports" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('chart') %></span><span class="lbl">Analytics & Reports</span></button>
+</div>
+      </details>
+      <details class="sb-acc" open>
+        <summary class="sb-group" data-group="publish" aria-label="Publishing & Content"><span class="g-txt">Publishing & Content</span><span class="sb-acc-chev" aria-hidden="true"><%- icon('chev-down') %></span></summary>
+        <div class="sb-items">
+        <button class="sb-item" data-view="newpost" data-lbl="Compose" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('pen') %></span><span class="lbl">Compose</span></button>
+        <button class="sb-item" data-views="approvals,scheduled" data-view="approvals" data-lbl="Queue & Scheduled" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('inbox') %></span><span class="lbl">Queue & Scheduled</span></button>
+        <button class="sb-item" data-view="bulk" data-lbl="Bulk Send" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('send') %></span><span class="lbl">Bulk Send</span></button>
+        <button class="sb-item" data-view="media" data-lbl="Content Library" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('folder') %></span><span class="lbl">Content Library</span></button>
+        <button class="sb-item" data-view="posts" data-lbl="History" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('history') %></span><span class="lbl">History</span></button>
+</div>
+      </details>
+      <details class="sb-acc" open>
+        <summary class="sb-group" data-group="channels" aria-label="Channels & Routing"><span class="g-txt">Channels & Routing</span><span class="sb-acc-chev" aria-hidden="true"><%- icon('chev-down') %></span></summary>
+        <div class="sb-items">
+        <button class="sb-item" data-views="sources,targets" data-view="sources" data-lbl="Sources & Targets" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('globe') %></span><span class="lbl">Sources & Targets</span></button>
+        <button class="sb-item" data-views="routing,guardrails" data-view="routing" data-lbl="Routing Rules" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('route') %></span><span class="lbl">Routing Rules</span></button>
+        <button class="sb-item" data-view="browse" data-lbl="Discover" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('search') %></span><span class="lbl">Discover</span></button>
+</div>
+      </details>
+      <details class="sb-acc" open>
+        <summary class="sb-group" data-group="audience" aria-label="Audience & Automation"><span class="g-txt">Audience & Automation</span><span class="sb-acc-chev" aria-hidden="true"><%- icon('chev-down') %></span></summary>
+        <div class="sb-items">
+        <button class="sb-item" data-view="whatsapp" data-lbl="WhatsApp Inbox" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('chat') %></span><span class="lbl">WhatsApp Inbox</span></button>
+        <button class="sb-item" data-view="journal" data-lbl="Contacts" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('users') %></span><span class="lbl">Contacts</span></button>
+        <button class="sb-item" data-views="aireply,aipilot" data-view="aireply" data-lbl="Auto-Replies & AI Pilot" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('bot') %></span><span class="lbl">Auto-Replies & AI Pilot</span></button>
+</div>
+      </details>
+      <details class="sb-acc" open>
+        <summary class="sb-group" data-group="system" aria-label="System & Workspace"><span class="g-txt">System & Workspace</span><span class="sb-acc-chev" aria-hidden="true"><%- icon('chev-down') %></span></summary>
+        <div class="sb-items">
+        <button class="sb-item" data-view="branding" data-lbl="Brand & Workspace" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('wand') %></span><span class="lbl">Brand & Workspace</span></button>
+        <button class="sb-item" data-views="health,logs,audit" data-view="health" data-lbl="System Health & Logs" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('pulse') %></span><span class="lbl">System Health & Logs</span></button>
+        <button class="sb-item" data-view="email" data-lbl="Email & Notifications" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('mail') %></span><span class="lbl">Email & Notifications</span></button>
+        <button class="sb-item" data-views="settings,about" data-view="settings" data-lbl="Settings & About" role="link" tabindex="0"><span class="sb-glyph" aria-hidden="true"><%- icon('settings') %></span><span class="lbl">Settings & About</span></button>
+</div>
+      </details>
+</nav>
     <!-- Reference: paired-identity card · labeled panic stop · workspace owner row -->
     <div class="sb-foot sidebar-bottom">
       <div class="paired-card" id="pairedCard">
         <span class="paired-indicator" id="pairedDot"></span>
         <div><strong id="pairedTitle">WhatsApp</strong><small id="pairedSub">Link from Home — one scan, never again</small></div>
       </div>
-      <button class="panic-sidebar" id="sbPanicStatus" data-p="off" title="Panic stop status — the shield in the top bar pauses and resumes everything (exact state is restored)"><span class="dot"></span><span class="p-txt">Panic stop</span><kbd>⎋</kbd></button>
       <div class="user-row">
         <span class="avatar" id="userAvatar">RA</span>
         <div class="user-copy"><strong id="userName">Workspace owner</strong><small>Administrator</small></div>
@@ -128,7 +120,6 @@ try {
         <span class="connection-pill" id="connPill" title="WhatsApp link state — routine deploys never ask for a new QR scan">
           <span class="health-dot" id="connDot"></span><span id="connState">Checking…</span><span class="muted">·</span><strong id="connName"><%= botName %> Primary</strong>
         </span>
-        <span class="wa-badge" id="waBadge" data-s="" hidden><span class="dot"></span><span id="waBadgeText"></span></span>
         <span class="ro-chip" id="roChip" hidden>READ-ONLY</span>
         <button class="icon-btn bell-btn notification-button" id="notifBtn" title="Notifications" aria-label="Notifications">
           <%- icon('bell','icon icon-sm') %><span class="bell-badge" id="notifBadge" hidden>0</span>
@@ -167,7 +158,7 @@ try {
         <div id="cloudNote"></div>
         <!-- Reference home shell: eyebrow + greeting + live badge + New post -->
         <div class="page-heading">
-          <div><div class="eyebrow">COMMAND / OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Your broadcast desk is operating normally. Here is the signal across your channels.</p></div>
+          <div><div class="eyebrow">OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Your broadcast desk is operating normally. Here is the signal across your channels.</p></div>
           <div class="heading-actions"><span class="live-badge"><i></i> LIVE · 24/7</span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
         </div>
         <div class="card pausebar" id="pauseBar" data-hov>
@@ -230,6 +221,11 @@ try {
 
       <!-- ═══ CHANNELS · SOURCES ═══ -->
       <section class="view" data-view="sources" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Sources & Targets">
+        <button class="vtab" data-go="sources" role="tab">Sources</button>
+        <button class="vtab" data-go="targets" role="tab">Targets</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Sources</h2><div class="ph-d">Channels the bot follows — every post they make is mirrored to your targets.</div></div>
           <div class="ph-a">
@@ -316,6 +312,11 @@ try {
 
       <!-- ═══ CHANNELS · TARGETS ═══ -->
       <section class="view" data-view="targets" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Sources & Targets">
+        <button class="vtab" data-go="sources" role="tab">Sources</button>
+        <button class="vtab" data-go="targets" role="tab">Targets</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Targets</h2><div class="ph-d">Your channels — everything the bot publishes goes here.</div></div>
           <div class="ph-a">
@@ -348,6 +349,11 @@ try {
 
       <!-- ═══ CHANNELS · ROUTING ═══ -->
       <section class="view" data-view="routing" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Routing Rules">
+        <button class="vtab" data-go="routing" role="tab">Routing</button>
+        <button class="vtab" data-go="guardrails" role="tab">Rules</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Routing</h2><div class="ph-d">Where posts go — per-target include / exclude / media filters.</div></div>
         </div>
@@ -491,6 +497,11 @@ try {
 
       <!-- ═══ CONTENT · SCHEDULED ═══ -->
       <section class="view" data-view="scheduled" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Queue & Scheduled">
+        <button class="vtab" data-go="approvals" role="tab">Queue</button>
+        <button class="vtab" data-go="scheduled" role="tab">Scheduled</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Scheduled</h2><div class="ph-d">Posts that go out at the time you pick. Missed while offline — published on wake.</div></div>
           <div class="ph-a">
@@ -755,6 +766,11 @@ try {
 
       <!-- ═══ CONTENT · APPROVAL QUEUE (5A · R37/R43) ═══ -->
       <section class="view" data-view="approvals" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Queue & Scheduled">
+        <button class="vtab" data-go="approvals" role="tab">Queue</button>
+        <button class="vtab" data-go="scheduled" role="tab">Scheduled</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Approval queue</h2><div class="ph-d">Review each post before it reaches its selected targets — approve, edit or discard. The Live Queue shows what is pending, in flight or failed right now.</div></div>
           <div class="ph-a">
@@ -873,6 +889,11 @@ try {
 
       <!-- ═══ AUTOMATION · AI PILOT ═══ -->
       <section class="view" data-view="aipilot" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Auto-Replies & AI Pilot">
+        <button class="vtab" data-go="aireply" role="tab">Auto-Replies</button>
+        <button class="vtab" data-go="aipilot" role="tab">AI Pilot</button>
+      </div>
+
         <div class="ph"><div class="ph-l"><h2>Pilot</h2><div class="ph-d">The AI reads every incoming post and only publishes the ones that match your rule.</div></div></div>
         <div class="card">
           <div class="card-h">Pilot <%- icon('bot','icon') %></div>
@@ -903,6 +924,11 @@ try {
 
       <!-- ═══ AUTOMATION · AUTO-REPLY ═══ -->
       <section class="view" data-view="aireply" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Auto-Replies & AI Pilot">
+        <button class="vtab" data-go="aireply" role="tab">Auto-Replies</button>
+        <button class="vtab" data-go="aipilot" role="tab">AI Pilot</button>
+      </div>
+
         <div class="ph"><div class="ph-l"><h2>Replies</h2><div class="ph-d">The AI answers personal WhatsApp messages for you.</div></div></div>
         <div class="card">
           <div class="card-h">AI auto-reply</div>
@@ -940,6 +966,11 @@ try {
 
       <!-- ═══ AUTOMATION · DIGEST & TRANSLATE ═══ -->
       <section class="view" data-view="digest" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Analytics & Reports">
+        <button class="vtab" data-go="analytics" role="tab">Analytics</button>
+        <button class="vtab" data-go="digest" role="tab">Reports & Digest</button>
+      </div>
+
         <div class="ph"><div class="ph-l"><h2>Reports and Digest</h2><div class="ph-d">Everything the bot reports back to you: the AI daily digest, the morning recap, the weekly report and instant failure alerts — all to your own number.</div></div></div>
         <div class="card">
           <div class="card-h">AI digest</div>
@@ -995,6 +1026,11 @@ try {
 
       <!-- ═══ AUTOMATION · GUARDRAILS ═══ -->
       <section class="view" data-view="guardrails" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Routing Rules">
+        <button class="vtab" data-go="routing" role="tab">Routing</button>
+        <button class="vtab" data-go="guardrails" role="tab">Rules</button>
+      </div>
+
         <div class="ph"><div class="ph-l"><h2>Rules</h2><div class="ph-d">The safety net — never post spam, never flood, never double-post. Dedupe and post-shaping switches live in Settings · General, where they shape every post.</div></div></div>
         <div class="card">
           <div class="card-h">AI safety screen <%- icon('shield','icon') %></div>
@@ -1195,6 +1231,11 @@ try {
 
       <!-- ═══ INSIGHTS · ANALYTICS ═══ -->
       <section class="view" data-view="analytics" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Analytics & Reports">
+        <button class="vtab" data-go="analytics" role="tab">Analytics</button>
+        <button class="vtab" data-go="digest" role="tab">Reports & Digest</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Analytics</h2><div class="ph-d">What got published, from where, to where, when — and why things were skipped.</div></div>
           <div class="ph-a">
@@ -1258,6 +1299,12 @@ try {
 
       <!-- ═══ INSIGHTS · HEALTH ═══ -->
       <section class="view" data-view="health" hidden>
+      <div class="vtab-row" role="tablist" aria-label="System Health & Logs">
+        <button class="vtab" data-go="health" role="tab">Health</button>
+        <button class="vtab" data-go="logs" role="tab">Logs</button>
+        <button class="vtab" data-go="audit" role="tab">Audit</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Health</h2><div class="ph-d">One 0–100 score, its weakest parts, and a full self-test you can run any time.</div></div>
           <div class="ph-a"><button class="btn btn-p" id="selftestRun"><%- icon('gauge','icon icon-xs') %> Run full self-test</button></div>
@@ -1297,6 +1344,12 @@ try {
 
       <!-- ═══ INSIGHTS · LOGS ═══ -->
       <section class="view" data-view="logs" hidden>
+      <div class="vtab-row" role="tablist" aria-label="System Health & Logs">
+        <button class="vtab" data-go="health" role="tab">Health</button>
+        <button class="vtab" data-go="logs" role="tab">Logs</button>
+        <button class="vtab" data-go="audit" role="tab">Audit</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Logs</h2><div class="ph-d">Every event the bot records — settings, publishes, AI actions, repairs.</div></div>
           <div class="ph-a">
@@ -1319,6 +1372,12 @@ try {
 
       <!-- ═══ SYSTEM · AUDIT (5E R69) ═══ -->
       <section class="view" data-view="audit" hidden>
+      <div class="vtab-row" role="tablist" aria-label="System Health & Logs">
+        <button class="vtab" data-go="health" role="tab">Health</button>
+        <button class="vtab" data-go="logs" role="tab">Logs</button>
+        <button class="vtab" data-go="audit" role="tab">Audit</button>
+      </div>
+
         <div class="ph">
           <div class="ph-l"><h2>Audit</h2><div class="ph-d">Every meaningful action, with who did it and when — logins, switches, channel changes, backups, panics.</div></div>
           <div class="ph-a"><button class="btn" id="audCsv"><%- icon('download','icon icon-xs') %> CSV</button></div>
@@ -1345,6 +1404,11 @@ try {
 
       <!-- ═══ SYSTEM · SETTINGS (collapsed categories) ═══ -->
       <section class="view" data-view="settings" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Settings & About">
+        <button class="vtab" data-go="settings" role="tab">Settings</button>
+        <button class="vtab" data-go="about" role="tab">About</button>
+      </div>
+
         <div class="ph"><div class="ph-l"><h2>Settings</h2><div class="ph-d">Everything the bot can be told — eight sections, one at a time. Every change saves with its own button on the spot. The WhatsApp mirror is always left exactly as WhatsApp renders it.</div></div></div>
         <div class="set-wrap">
           <!-- Reskin §7.5/§8: spec's eight tabs over the app's existing field cards.
@@ -1723,6 +1787,11 @@ try {
 
       <!-- ═══ SYSTEM · ABOUT (arrives in 5J · J9) ═══ -->
       <section class="view" data-view="about" hidden>
+      <div class="vtab-row" role="tablist" aria-label="Settings & About">
+        <button class="vtab" data-go="settings" role="tab">Settings</button>
+        <button class="vtab" data-go="about" role="tab">About</button>
+      </div>
+
         <div class="ph"><div class="ph-l"><h2>About</h2><div class="ph-d">Version, changelog, last deploy and a quick health snapshot.</div></div></div>
         <div class="card">
           <div class="card-h">API explorer <%- icon('terminal','icon') %> <span class="muted tiny">— try the bot's own endpoints</span></div>
@@ -1843,6 +1912,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=s11"></script>
+<script src="/app.js?v=s12"></script>
 </body>
 </html>
