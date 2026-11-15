@@ -112,8 +112,8 @@ async function ico(name) {
 
 /* ── 2 · THEME (dark / light / auto, persisted) ─────────────────── */
 function themeCurrent() {
-  let t = 'dark';
-  try { t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'dark'; } catch (e) {}
+  let t = 'light';
+  try { t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'light'; } catch (e) {}
   return t;
 }
 function themeApplied(t) { return t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; }
@@ -131,7 +131,7 @@ function setThemeIcon(t) {
   if (t === 'auto') matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { document.documentElement.dataset.theme = themeApplied('auto'); });
 })();
 $('#themeBtn').addEventListener('click', () => {
-  const order = ['dark', 'light', 'auto'];
+  const order = ['light', 'dark', 'auto'];
   const next = order[(order.indexOf(themeCurrent()) + 1) % order.length];
   try { localStorage.setItem('rc-theme', next); } catch (e) {}
   document.documentElement.dataset.theme = themeApplied(next);
@@ -240,21 +240,19 @@ const LEGACY_VIEWS = {
   dashboard: 'home', content: 'newpost', beautify: 'newpost',
   calendar: 'scheduled', templates: 'media', 'auto-reply': 'aireply'
 };
-/* every view maps to one of the eight Signal Desk groups (spec §1.3). Drives sidebar state. */
+/* v10 IA — every view maps to one of the six Slate Console groups. Drives sidebar state. */
 const AREA = {
-  home: 'command',
-  newpost: 'broadcast', approvals: 'broadcast', scheduled: 'broadcast', posts: 'broadcast', bulk: 'broadcast',
+  home: 'command', newpost: 'command', approvals: 'command', scheduled: 'command', posts: 'command', bulk: 'command',
   sources: 'channels', targets: 'channels', browse: 'channels', routing: 'channels',
   whatsapp: 'people', journal: 'people', aireply: 'people',
-  media: 'studio', branding: 'studio',
-  aipilot: 'intelligence', guardrails: 'intelligence',
-  analytics: 'insights', digest: 'insights', health: 'insights', logs: 'insights', audit: 'insights',
+  media: 'studio', branding: 'studio', aipilot: 'studio', guardrails: 'studio',
+  analytics: 'monitor', digest: 'monitor', health: 'monitor', logs: 'monitor', audit: 'monitor',
   email: 'system', settings: 'system', about: 'system'
 };
-/* Reference top-bar breadcrumb labels (one per group) */
+/* group labels (one per group) */
 const GROUP_LABEL = {
-  command: 'COMMAND', broadcast: 'BROADCAST', channels: 'CHANNELS', people: 'PEOPLE',
-  studio: 'STUDIO', intelligence: 'INTELLIGENCE', insights: 'INSIGHTS', system: 'SYSTEM'
+  command: 'COMMAND', channels: 'CHANNELS', people: 'PEOPLE',
+  studio: 'STUDIO', monitor: 'MONITOR', system: 'SYSTEM'
 };
 const loaders = {};
 let currentView = 'home';
@@ -521,7 +519,7 @@ setInterval(pollStatus, 30000);
   });
   /* theme radios (Workspace & language) share the sidebar theme cycle */
   function syncThemeRadios() {
-    const t = (function () { try { return localStorage.getItem('rc-theme') || 'dark'; } catch (e) { return 'dark'; } })();
+    const t = (function () { try { return localStorage.getItem('rc-theme') || 'light'; } catch (e) { return 'light'; } })();
     $$('#themeRadios [data-theme-choice]').forEach((b) => b.classList.toggle('selected', b.dataset.themeChoice === t));
   }
   const tr = $('#themeRadios');
@@ -5306,6 +5304,7 @@ loaders.routing = async () => {
 
 /* J9 — About: version, changelog, last boot, storage */
 const CHANGELOG = [
+  ['v10.0.0 — Slate Console (this build)', 'The presentation layer, rebuilt from scratch — nothing behind it moved. A disciplined LIGHT operations console: cool-neutral canvas (#F5F6F8), white cards, hairline borders and zero shadows, ONE indigo accent (#4F46E5), an 8-pt spacing grid, tabular numerals on every data cell, and a dark variant behind the same toggle. Flatter information architecture: the sidebar is six groups over the same 25 screens — Command (Home, Compose, Queue, Scheduled, History, Bulk), Channels (Sources, Targets, Discover, Routing), People (WhatsApp Inbox, Contacts, Auto-replies), Studio (Library, Brand, AI Pilot, Rules), Monitor (Analytics, Reports & Digest, Health, Logs, Audit), System (Email, Settings, About) — with collapsible groups, a 64 px icon rail, and a 232 px rail of plain text labels. The top bar is one strong title, the Ctrl K search, a live WhatsApp status chip, the bell and the red Panic. Home is data-first: a four-cell status band (WhatsApp · Panic · Pacing · Cloud memory), the time-of-day greeting, the pause bar, KPI cards, the real 24-hour activity chart and the Recent activity feed, with Queue and Health beside it. Settings keeps exactly five sections under short names — General, Delivery, Integrations, Security, Data. WhatsApp mirror stays byte-identical, LTR, official. The backend, APIs, database, WhatsApp auth/QR, automation, all 33 switches and every saved setting are untouched'],
   ['v9.1.0 — Reference layout (this build)', 'Full integration of the delivered reference design: top bar is now a breadcrumb (GROUP / Screen) with a live connection pill, labeled Panic stop and a wide Search anything field (Ctrl K). Sidebar: rotated R brand mark with the SIGNAL DESK sub-line, a one-line 8/8 health readout, the WhatsApp paired-identity card, the panic-stop status with the Esc key hint, and the workspace-owner row with inline help + theme controls. Home: COMMAND / OVERVIEW eyebrow, time-of-day greeting, LIVE badge, a real 24-hour activity chart (hourly published / skipped / failed, Pakistan time, new read-only /api/overview/hourly route), queue status, system health ring and adaptive pacing panels. Settings: exactly five sections in reference order — Workspace & language (bot name, language, theme as Dark / Light / System pills), Delivery controls, Integrations & reports, Security & sessions, Data & recovery; multi-group tabs now show every group they cover. All 25 screens, all 33 switches, the pipeline, WhatsApp pairing and settings persistence are unchanged'],
   ['v9.0.0 — Signal Desk', 'Full redesign from the delivered product spec + 8 mockups. Olive-black console (#10130F) on a four-step olive surface ladder · one citron accent (#D7F36A) · NO shadows anywhere (borders + surface steps only) · Noto Sans Arabic variable 400–700, self-hosted, one family for EN + UR. New eight-group IA (Command · Broadcast · Channels · People · Studio · Intelligence · Insights · System) — all 25 screens live in the sidebar, no inner-tab row · 64 px top bar · 248 px sidebar (72 px rail on tablet) · 1440 px canvas. Phone: 5-item bottom bar with the raised 56 px citron Compose. Spec component refresh: 42 px inputs, 40 px buttons, 42×24 switches, 112 px KPIs with a 3×24 citron rule, 22 px status pills, 56 px table rows, 160 ms switch motion. Read-only switch chips ("Label · Off ↗") on Home/Compose/History — state + deep link, never a second control. Light theme (#F4F6EF, accent #5E7C19) · Urdu RTL shell (inbox stays LTR) · WhatsApp mirror byte-identical · pipeline untouched · REPO-SLIM hotfix: media of ANY size is saved (the old 450 KB / 5 MB caps are gone) — and the media of any post is deleted right after it is published to the target channel, so nothing accumulates; WhatsApp-tab photos live on disk instead of inside the database (a 30-day safety net for unposted media, Settings → Storage), the cloud login syncs only when something actually changes (idle = zero GitHub writes), and one click "Compacts" the backup branch to a single snapshot so the GitHub repo stops growing'],
   ['v8.5.0 — Graphite', 'The visual system, rebuilt from scratch: Geist typeface (self-hosted) · warm graphite surfaces · monochrome system with off-white primary actions · one warm accent, deployed scarcely · hairlines + inner top-edge light, no card shadows in dark · refined buttons, switches, tables, KPIs, command palette, modals, toasts · light theme with tint elevation · WhatsApp mirror untouched'],

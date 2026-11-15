@@ -678,19 +678,17 @@ const calls = [];
   const missing = need.filter((n) => !have.has(n));
   ok(missing.length === 0, 'all Meridian 2 contract views present (missing: ' + (missing.join(',') || 'none') + ')');
   ok(!have.has('calendar') && !have.has('templates') && !have.has('beautify'), 'old calendar/templates/beautify screens regrouped (gone)');
-  /* Signal Desk (v9.0.0, product spec §1.3) — 8 groups, 25 screens, no inner-tab row */
-  ok(d.querySelectorAll('#sidebar .sb-group').length === 8, 'sidebar has 8 IA groups (got ' + d.querySelectorAll('#sidebar .sb-group').length + ')');
+  /* Slate Console (v10.0.0) — 6 groups, 25 screens, no inner-tab row */
+  ok(d.querySelectorAll('#sidebar .sb-group').length === 6, 'sidebar has 6 IA groups (got ' + d.querySelectorAll('#sidebar .sb-group').length + ')');
   ok(d.querySelectorAll('#sidebar .sb-item').length === 25, 'sidebar has 25 screen items (got ' + d.querySelectorAll('#sidebar .sb-item').length + ')');
   const grpItems = (g) => [...d.querySelectorAll('#' + g + 'Items .sb-item')].map((b) => b.dataset.view);
-  ok(JSON.stringify(grpItems('gCommand')) === JSON.stringify(['home']), 'COMMAND = Home');
-  ok(JSON.stringify(grpItems('gBroadcast')) === JSON.stringify(['newpost', 'approvals', 'scheduled', 'posts', 'bulk']), 'BROADCAST = Compose/Queue/Scheduled/History/Bulk Send');
+  ok(JSON.stringify(grpItems('gCommand')) === JSON.stringify(['home', 'newpost', 'approvals', 'scheduled', 'posts', 'bulk']), 'COMMAND = Home/Compose/Queue/Scheduled/History/Bulk Send');
   ok(JSON.stringify(grpItems('gChannels')) === JSON.stringify(['sources', 'targets', 'browse', 'routing']), 'CHANNELS = Sources/Targets/Discover/Routing');
   ok(JSON.stringify(grpItems('gPeople')) === JSON.stringify(['whatsapp', 'journal', 'aireply']), 'PEOPLE = WhatsApp Inbox/Contacts/Auto-replies');
-  ok(JSON.stringify(grpItems('gStudio')) === JSON.stringify(['media', 'branding']), 'STUDIO = Library/Brand');
-  ok(JSON.stringify(grpItems('gIntelligence')) === JSON.stringify(['aipilot', 'guardrails']), 'INTELLIGENCE = AI Pilot/Rules');
-  ok(JSON.stringify(grpItems('gInsights')) === JSON.stringify(['analytics', 'digest', 'health', 'logs', 'audit']), 'INSIGHTS = Analytics/Reports & Digest/Health/Logs/Audit');
+  ok(JSON.stringify(grpItems('gStudio')) === JSON.stringify(['media', 'branding', 'aipilot', 'guardrails']), 'STUDIO = Library/Brand/AI Pilot/Rules');
+  ok(JSON.stringify(grpItems('gMonitor')) === JSON.stringify(['analytics', 'digest', 'health', 'logs', 'audit']), 'MONITOR = Analytics/Reports & Digest/Health/Logs/Audit');
   ok(JSON.stringify(grpItems('gSystem')) === JSON.stringify(['email', 'settings', 'about']), 'SYSTEM = Email/Settings/About');
-  ok(d.getElementById('inav') === null, 'no inner-tab row (every screen lives in the 8-group sidebar)');
+  ok(d.getElementById('inav') === null, 'no inner-tab row (every screen lives in the 6-group sidebar)');
   ok(d.querySelectorAll('.btabs .bt').length === 5, 'mobile bottom bar = Home/Queue/Compose(fab)/Channels/More (5 items)');
   ok(!!d.querySelector('.btabs .bt-fab[data-view="newpost"]'), 'raised center Compose FAB');
   ok(d.getElementById('recentStrip') !== null, 'Recent strip present (last 3)');
@@ -2033,7 +2031,7 @@ const calls = [];
   /* ---------- 5J (J9) · About + changelog ---------- */
   d.querySelector('.sb-item[data-view="about"]').click();
   await sleep(500);
-  ok(d.querySelectorAll('#abChangelog .chg').length === 20, '5J: changelog lists every build (got ' + d.querySelectorAll('#abChangelog .chg').length + ')');
+  ok(d.querySelectorAll('#abChangelog .chg').length === 21, '5J: changelog lists every build (got ' + d.querySelectorAll('#abChangelog .chg').length + ')');
   ok(d.getElementById('abChangelog').textContent.includes('Meridian 2') && d.getElementById('abChangelog').textContent.includes('Phase R'), 'M2: changelog covers Meridian 2 back to Phase R, no banned phase labels on current builds');
   ok(d.getElementById('abUptime').textContent.includes('booted'), '5J: About shows boot/uptime state');
 

@@ -1,6 +1,6 @@
 {
   "name": "raqifluz-channel-bot",
-  "version": "9.1.0",
+  "version": "10.0.0",
   "description": "Raqifluz Channel Bot v6 \u2014 hands-off WhatsApp channel mirroring: follow \u2192 clean \u2192 publish, with power tools behind owner switches",
   "main": "src/index.js",
   "license": "MIT",
