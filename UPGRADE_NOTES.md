@@ -1,3 +1,38 @@
+# UPGRADE_NOTES — v1.1.1 · phone pass + overlap fixes (2026-11-15)
+
+**User report:** "i'll see some mixed up like getting into each other and also make it for phone so it works for phone." Design reference supplied: `uploads/raqifluz-dashboard-redesigned.html` (light "Signal Desk" mockup) — treated as the phone's target look.
+
+## Root causes found (evidence from the shipped v1.1.0)
+| # | Bug | Evidence / fix |
+|---|---|---|
+| 1 | **Corrupted CSS comment fragment** — a stray `*/` (orphaned comment tail, old L1658) made Chrome's error recovery swallow the very next rule: `.ww { display: flex; … }` — at **every width**. The WhatsApp mirror's flex container was broken; on phone the list pane and chat pane stacked and collided (the "mixed up" report). | Fragment removed; comment balance now 136/136. Verified present in shipped v1.1.0 via `git show v1.1.0:src/web/assets/app.css` |
+| 2 | **`.panic-lbl` overflow** — top-right panic button is an `icon-btn` (fixed 36px) carrying a "Panic stop" text label → label always extended 21px past the viewport's right edge | Mockup shows an icon-only shield. `.panic-top` is now a square icon button; label hidden everywhere (kept in DOM for title/aria) |
+| 3 | **`.duo` / `.comp2` grids never collapsed** — v1.1 base rules (old L2105/L2155) landed *after* the original `@media (max-width:1023px)` collapse rules; equal specificity → later rule won at every width → 2-up cards at 390px (health score card text bleeding into the Parts card) | `@media (max-width:1023px) { .duo, .comp2 { grid-template-columns: 1fr; } }` appended last (source order now wins) |
+| 4 | **Phone topbar overflow (390px)** — right cluster (search + palette + buttons) exceeded 390px by 37px on every view | `.command-search` hidden on phone (palette still reachable via the `pal-btn` icon), icon buttons 34px, gaps tightened |
+
+## Phone (≤767px) — mockup light look, desktop untouched
+- One trailing `@media (max-width: 767px)` block: light tokens (bg `#F8FAFC`, white surfaces, `#E2E8F0` borders, slate text, emerald `#059669` accent, `color-scheme: light`), scoped to `:root:not([data-theme="light"]):not([data-theme="glass"])` — explicit light/glass theme picks keep their own tokens; **desktop (≥768px) is byte-identical in behavior** (dark default)
+- KPI cards carry the mockup's green gradient (`#ECFDF5 → #FFF`); cards 12px radius + whisper shadow
+- Tables (`.t`) scroll horizontally **inside their card** (`.tw` / `.rosw` likewise) — no page-level overflow
+- Charts/SVG shrink to fit (`svg { max-width: 100% }`); activity chart 1-col; bar columns 96px
+- **WhatsApp mirror — still dark, LTR, never themed (v600 constraint kept)**: full-bleed under the 56px topbar; side pane 100%; **new chat toggle**: tap a chat → conversation goes full-width with a back button (`.wa-back` / `#waBackBtn`), back returns to the list. Implemented with a `.ww.chat-open` class (toggled in `waOpen()`) + one binding next to the other WA buttons. Composer lifts above the fixed bottom tab bar (`padding-bottom: 64px + safe-area`)
+- Settings tabs: horizontal scroll instead of wrap
+
+## Files changed
+- `src/web/assets/app.css` — all visual changes (orphan fragment removed, panic button, grid collapse block, phone block)
+- `src/web/assets/app.js` — two additions only: `chat-open` toggle inside `waOpen()`, `#waBackBtn` click binding
+- `src/web/views/dashboard.ejs` — `#waBackBtn` inside `.wa-pane`; cache-bust bumps `app.css?v=s14` / `app.js?v=s13`
+
+## Verification (live server, 2026-11-15)
+- Puppeteer overflow audit: desktop 1440 + phone 390 (iPhone UA) across 16 view runs = **0 overflows, 0 console errors, 0 page errors**
+- Phone WA toggle test: closed → list only; open → pane full height (56→844) with back button; back click removes the class
+- Ship gate: API probes all 200 · **33/33 switches OFF (original keys)** · SSE 200 · 25 `data-view` sections · 517 ids · 33 opt-rows · 8 settings tabs · jsdom boots real app.js · `show()` on all 25 views · vtab click OK · css comment balance 136/136 · wa.js QR refs intact · no CDN scripts in ejs
+
+## NOT changed
+package.json/lock, all backend/APIs/DB, WA auth/QR/automation, the 33 switches (OFF by default, original keys), all 25 screens, v1.1 sidebar/vtabs/panic-modal behavior, light/glass theme picks.
+
+---
+
 # UPGRADE_NOTES.md — v1.1 bug fixes · sidebar reorganization · visual upgrade
 
 **Base:** the reskinned v1.0.0 (function = v11.0.0 core, look rebuilt per Raqifluz-UI-Reskin-Spec).

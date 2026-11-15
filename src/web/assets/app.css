@@ -481,13 +481,15 @@ img { max-width: 100%; }
 }
 .panic-btn { display: inline-flex; }
 .panic-top {
-  display: flex; align-items: center; gap: 8px; flex: none; white-space: nowrap;
-  height: 36px; padding: 0 14px;
+  display: inline-grid; place-items: center;
+  height: 36px; padding: 0;
   border-radius: 10px;
   background: transparent; border: 1px solid var(--error);
   color: var(--error-text); font-size: 13px; font-weight: 600;
   transition: background var(--dur) var(--ease);
 }
+/* label kept in markup for a11y/title, hidden everywhere (mockup: icon-only button) */
+.panic-lbl { display: none; }
 .panic-top:hover { background: var(--error-soft); }
 .panic-top.is-panic, .panic-top[data-p="on"] {
   background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
@@ -1655,7 +1657,6 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 
 
 
-byte-identical) ─ */
 .ww { display: flex; height: calc(100vh - var(--tb-h) - 0px); min-height: 480px; border: 1px solid var(--border); border-radius: var(--r-card); overflow: hidden; background: #0b141a; color: #e9edef; font-size: var(--t14); }
 
 
@@ -1862,6 +1863,7 @@ byte-identical) ─ */
 
 
 .wa-header { display: flex; align-items: center; gap: 12px; background: #202c33; padding: 10px var(--sp3); flex: none; min-height: 56px; }
+.wa-back { display: none; }
 
 
 
@@ -2236,3 +2238,115 @@ byte-identical) ─ */
 
 /* ── v1.1 · tabular-nums on all metrics ── */
 .k-v, .health-score strong, .pace-stats strong, .pacing-rate strong, .pill.num { font-variant-numeric: tabular-nums; }
+
+/* ── v1.1.1 · phone pass (QA-audited 2026-11-15) ─────────────────────────
+   Mockup-faithful light theme on mobile + overlap/overflow fixes.
+   Every rule lives inside ONE max-767px block: desktop (≥768px) untouched. */
+@media (max-width: 767px) {
+  /* mockup light look for the default theme; explicit light/glass picks keep their own tokens */
+  :root:not([data-theme="light"]):not([data-theme="glass"]) {
+    --bg: #F8FAFC;
+    --surface: #FFFFFF;
+    --surface-1: #FFFFFF;
+    --surface-2: #F1F5F9;
+    --surface-3: #E2E8F0;
+    --border-1: #E2E8F0;
+    --border-2: #CBD5E1;
+    --success-text: #047857;
+    --warning-text: #B45309;
+    --error-text: #BE123C;
+    --info-text: #1D4ED8;
+    color-scheme: light;
+    --text-1: #0F172A;
+    --text-2: #334155;
+    --text-3: #64748B;
+    --accent: #059669;
+    --accent-2: #047857;
+    --accent-soft: #ECFDF5;
+    --ok: #059669;
+    --warn: #D97706;
+    --bad: #E11D48;
+    --sh1: 0 1px 2px rgba(15, 23, 42, .05);
+    --sh2: 0 8px 24px rgba(15, 23, 42, .08);
+    --topbar-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+  }
+
+  /* topbar — one line, zero overflow (audit: search cluster pushed right edge to 427px) */
+  .command-search { display: none; }
+  .topbar { gap: 6px; }
+  .tb-right { flex-wrap: nowrap; }
+  .pal-btn { padding: 0 8px; border-radius: 10px; }
+  .icon-btn.sm { width: 34px; height: 34px; padding: 0; border-radius: 10px; }
+  .icon-btn.sm .icon { width: 18px; height: 18px; }
+
+  /* canvas — mockup spacing */
+  .view { padding: 14px 12px 20px; }
+  .page-heading { gap: 10px; }
+  .page-heading h1 { font-size: 22px; line-height: 30px; }
+  .ph-l h2 { font-size: 20px; line-height: 28px; }
+  .ph-sub { font-size: 13px; }
+
+  /* KPIs — 2×3 with the mockup's soft green gradient */
+  .kpi-grid, .kpis { gap: 10px; }
+  .kpi {
+    min-height: 96px; padding: 12px 12px; gap: 4px;
+    background: linear-gradient(180deg, #ECFDF5 0%, #FFFFFF 45%);
+    border-color: var(--border-1);
+  }
+  .k-l { white-space: normal; line-height: 18px; }
+  .k-tile { width: 38px; height: 38px; border-radius: 10px; }
+  .k-tile .icon { width: 18px; height: 18px; }
+
+  /* cards — mockup surface: 12px radius, whisper shadow */
+  .card, .ph { border-radius: 12px; box-shadow: var(--sh1); }
+
+  /* tables — scroll inside the card, never past the screen edge */
+  .t { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; border: 0; }
+  .t thead, .t tr { display: table; width: 100%; }
+  .t th { white-space: nowrap; }
+  .tw { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .rosw { flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .rosw::-webkit-scrollbar { height: 4px; }
+
+  /* charts + svg — shrink to fit, never push the width */
+  .activity-chart { grid-template-columns: 1fr; }
+  .bar-col { height: 96px; min-height: 0; }
+  .an-stats { gap: 8px; }
+  svg { max-width: 100%; }
+  .tw svg { height: auto; }
+
+  /* WhatsApp mirror — full-bleed under the 56px topbar, side pane 100% */
+  .view:has(.ww) { padding: 0; }
+  .ww {
+    border: 0; border-radius: 0;
+    min-height: calc(100dvh - var(--tb-h) - 64px);
+  }
+  .ww-side { width: 100%; max-width: 100%; }
+  /* chat toggle: full-width list → full-width conversation with back button */
+  .wa-pane { display: none; }
+  .ww.chat-open .wa-pane { display: flex; padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
+  .ww.chat-open .ww-side { display: none; }
+  .ww.chat-open .wa-back { display: inline-grid; }
+  .wa-back {
+    display: none; place-items: center;
+    position: absolute; top: 12px; left: 8px; z-index: 3;
+    width: 32px; height: 32px; border-radius: 50%;
+    background: transparent; border: 0; color: #e9edef;
+    font-size: 18px; line-height: 1; cursor: pointer; padding: 0;
+  }
+  .wa-back:active { background: rgba(233, 237, 239, .12); }
+  .wa-header { padding-left: 48px; }
+  .ww-numband { flex-wrap: wrap; }
+
+  /* settings tabs — horizontal scroll, no wrap-on-each-other */
+  .set-nav { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .set-nav::-webkit-scrollbar { display: none; }
+  .set-tab { white-space: nowrap; flex: none; }
+}
+
+/* v1.1.1 — restore responsive collapse: the v1.1 grid base rules (.comp2, .duo)
+   landed AFTER the original media blocks, so at equal specificity they won at
+   every width. This block sits last, so the 1-column collapse works again. */
+@media (max-width: 1023px) {
+  .duo, .comp2 { grid-template-columns: 1fr; }
+}

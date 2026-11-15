@@ -24,7 +24,7 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=s13">
+<link rel="stylesheet" href="/app.css?v=s14">
 </head>
 <body>
 <div class="app" id="app">
@@ -1113,6 +1113,7 @@ try {
             <div class="wa-chats" id="waChatList"></div>
           </div>
           <div class="wa-pane">
+            <button class="wa-back" id="waBackBtn" title="Back to chats" aria-label="Back to chats">←</button>
             <div class="wa-header" id="waHeader"><span class="muted">Pick a chat</span></div>
             <div class="wa-hbar" id="waHBar" hidden></div>
             <div class="wa-body" id="waMsgs"></div>
@@ -1912,6 +1913,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=s12"></script>
+<script src="/app.js?v=s13"></script>
 </body>
 </html>

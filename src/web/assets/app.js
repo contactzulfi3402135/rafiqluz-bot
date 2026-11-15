@@ -3404,6 +3404,7 @@ function waRenderList() {
 async function waOpen(jid) {
   if (jid !== waActive) { openedNow = null; waChatQ = ''; waChatSearchOpen = false; }
   waActive = jid;
+  const wwEl = document.querySelector('.ww'); if (wwEl) wwEl.classList.add('chat-open');
   try { await api('/api/inbox/' + jidUrl(jid) + '/read?' + sessQ(), { method: 'POST' }); } catch (e) {}
   try { await loaders.whatsapp(); } catch (e) { toast(e.message, 'err'); }
 }
@@ -3537,6 +3538,7 @@ $('#waSearch').addEventListener('input', (ev) => { waSearch = ev.target.value; w
 $('#waContactsBtn').addEventListener('click', () => toggleContacts());
 $('#waContactSearch').addEventListener('input', (ev) => { waContactQ = ev.target.value; loadContacts().catch(() => {}); });
 $('#waNumBtn').addEventListener('click', () => toggleNumDrop());
+$('#waBackBtn').addEventListener('click', () => { const wwEl = document.querySelector('.ww'); if (wwEl) wwEl.classList.remove('chat-open'); });
 $$('.ww-pill').forEach((b) => b.addEventListener('click', () => {
   waFilter = b.dataset.f;
   if (waFilter !== 'archived') waShowArchived = false;
