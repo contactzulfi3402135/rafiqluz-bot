@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title><%= botName %> · Connect a number</title>
+<style>
+:root{--bg:#0b141a;--panel:#111b21;--line:#222f35;--text:#e9edef;--text2:#8696a0;--green:#00a884;--head:#202c33}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+.top{background:var(--head);display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.top .logo{width:34px;height:34px;border-radius:50%;background:var(--green);display:grid;place-items:center;font-size:18px}
+.top b{font-size:16px}
+.wrap{max-width:560px;margin:28px auto 60px;padding:0 18px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+h1{font-size:21px;margin:0 0 14px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{flex:1;text-align:center;padding:10px;border:1px solid var(--line);border-radius:10px;cursor:pointer;color:var(--text2);font-size:14.5px;font-weight:600;user-select:none}
+.tab.active{background:var(--green);border-color:var(--green);color:#fff}
+ol{margin:0 0 16px;padding-left:20px;color:var(--text2);font-size:14px;line-height:1.8}
+ol b{color:var(--text)}
+.btn{background:var(--green);color:#fff;border:0;border-radius:10px;padding:12px 18px;font-size:14.5px;font-weight:600;cursor:pointer;width:100%}
+.btn:disabled{opacity:.55;cursor:default}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text);font-weight:500}
+.qrbox{margin:16px auto 6px;width:296px;height:296px;background:#fff;border-radius:14px;display:grid;place-items:center;position:relative}
+.qrbox img{width:280px;height:280px;image-rendering:pixelated}
+.qrbox .ph{color:#54656f;font-size:13px;text-align:center;padding:0 22px;line-height:1.6}
+.qrbox .spin{position:absolute;inset:0;display:grid;place-items:center;background:rgba(255,255,255,.92);color:#54656f;font-size:13.5px;border-radius:14px;padding:20px;text-align:center}
+.hint{color:var(--text2);font-size:12.5px;text-align:center;line-height:1.6;margin-top:8px}
+.ok{background:#103529;border:1px solid #00a884;color:#d9fdd3;border-radius:12px;padding:14px 16px;font-size:14px;line-height:1.6;margin-top:14px}
+.err{background:#2a1516;border:1px solid #f15c6d;color:#ffd7db;border-radius:12px;padding:12px 14px;font-size:13.5px;margin-top:12px;display:none}
+input[type=text]{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:15px;margin-bottom:10px}
+.codebox{margin:16px auto 6px;text-align:center;background:var(--bg);border:1px dashed var(--green);border-radius:14px;padding:20px}
+.codebox .code{font-size:40px;font-weight:700;letter-spacing:10px;color:var(--green);font-family:ui-monospace,Menlo,Consolas,monospace}
+.codebox p{color:var(--text2);font-size:13px;line-height:1.7;margin:12px 0 0}
+</style>
+</head>
+<body>
+<div class="top">
+  <span class="logo">💬</span><b>WhatsApp</b>
+</div>
+
+<div class="wrap">
+  <div class="card">
+    <h1>Link a WhatsApp number</h1>
+    <div class="tabs">
+      <div class="tab active" id="tabQr">📷 Scan QR code</div>
+      <div class="tab" id="tabPair">🔢 Type a pairing code</div>
+    </div>
+
+    <!-- QR pane -->
+    <div id="paneQr">
+      <ol>
+        <li>Open <b>WhatsApp</b> on the phone</li>
+        <li>Tap <b>Settings → Linked devices → Link a device</b></li>
+        <li>Point the phone at this code</li>
+      </ol>
+      <button class="btn" id="genBtn">＋ Generate QR code</button>
+      <div class="qrbox" id="qrbox" style="display:none"><span class="ph">QR will appear here</span></div>
+      <div class="hint" id="qrHint" style="display:none">QR refreshes by itself — finish on the phone within a minute.</div>
+    </div>
+
+    <!-- pairing-code pane -->
+    <div id="panePair" hidden>
+      <ol>
+        <li>Enter the phone number with country code</li>
+        <li>Press <b>Get pairing code</b></li>
+        <li>On the phone: <b>WhatsApp → Settings → Linked devices → Link with phone number</b></li>
+        <li>Type the 8-character code shown below</li>
+      </ol>
+      <input type="text" id="pairPhone" inputmode="numeric" autocomplete="off" placeholder="Phone with country code, e.g. 923001234567">
+      <button class="btn" id="pairBtn">Get pairing code</button>
+      <div class="codebox" id="pairBox" style="display:none">
+        <div class="code" id="pairCode">········</div>
+        <p>Type this code on the phone:<br><b>WhatsApp → Settings → Linked devices → Link with phone number</b><br>The code works for about a minute.</p>
+        <div style="margin-top:12px"><button class="btn ghost" id="pairNew" type="button">↻ Get a new code</button></div>
+      </div>
+      <div class="hint" id="pairHint" style="display:none">Waiting for the phone… the code above stays valid about a minute.</div>
+    </div>
+
+    <div class="ok" id="okMsg" style="display:none"></div>
+    <div class="err" id="errMsg"></div>
+  </div>
+</div>
+
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var poll = null, curId = null, mode = 'qr';
+
+function showTab(m) {
+  mode = m;
+  $('#tabQr').classList.toggle('active', m === 'qr');
+  $('#tabPair').classList.toggle('active', m === 'pair');
+  $('#paneQr').hidden = m !== 'qr';
+  $('#panePair').hidden = m !== 'pair';
+}
+$('#tabQr').addEventListener('click', function () { showTab('qr'); });
+$('#tabPair').addEventListener('click', function () { showTab('pair'); });
+
+function stopPoll() { if (poll) { clearInterval(poll); poll = null; } }
+function ok(msg) { stopPoll(); $('#okMsg').style.display = 'block'; $('#okMsg').innerHTML = msg; }
+function fail(msg) { $('#errMsg').style.display = 'block'; $('#errMsg').textContent = msg; }
+
+function pollOnce() {
+  if (!curId) return;
+  fetch('/api/public/connect/' + curId).then(function (r) { return r.json(); }).then(function (d) {
+    if (mode === 'qr') {
+      if (d.status === 'qr' && d.qr) {
+        $('#qrbox').style.display = 'grid';
+        $('#qrbox').innerHTML = '<img alt="WhatsApp QR" src="' + d.qr + '">';
+        $('#qrHint').style.display = 'block';
+      } else if (d.status === 'open') {
+        ok('✅ <b>+' + (d.phone || '') + ' connected.</b> Its chats, contacts and history are syncing into the dashboard now.');
+      } else if (d.status === 'logged_out') {
+        fail('The phone removed this device. Press the button again to make a new QR.');
+      }
+    } else {
+      if (d.pairCode) {
+        $('#pairBox').style.display = 'block';
+        $('#pairHint').style.display = 'block';
+        if (d.pairCode !== $('#pairCode').textContent) $('#pairCode').textContent = d.pairCode;
+      }
+      if (d.status === 'open') {
+        ok('✅ <b>+' + (d.phone || '') + ' connected.</b> Its chats, contacts and history are syncing into the dashboard now.');
+      } else if (d.status === 'logged_out') {
+        fail('The phone removed this device. Get a new code and try again.');
+      } else if (d.status === 'close' && !d.pairCode) {
+        fail('The pairing session dropped — press “Get pairing code” again.');
+      }
+    }
+  }).catch(function () {});
+}
+function startPoll() { stopPoll(); poll = setInterval(pollOnce, 2500); pollOnce(); }
+
+$('#genBtn').addEventListener('click', function () {
+  var btn = this; btn.disabled = true;
+  $('#errMsg').style.display = 'none'; $('#okMsg').style.display = 'none';
+  $('#qrbox').style.display = 'grid';
+  $('#qrbox').innerHTML = '<span class="spin">Starting the pairing… the QR appears in a few seconds</span>';
+  fetch('/api/public/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label: 'extra number' }) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'Could not start pairing.');
+      curId = d.id; startPoll();
+      setTimeout(function () { btn.disabled = false; btn.textContent = '＋ Connect another number'; }, 9000);
+    })
+    .catch(function (e) {
+      $('#qrbox').style.display = 'none';
+      fail(e.message); btn.disabled = false;
+    });
+});
+
+function requestPairCode(replaceId) {
+  var phone = $('#pairPhone').value.trim();
+  var btn = $('#pairBtn');
+  btn.disabled = true; btn.textContent = 'Asking WhatsApp for a code…';
+  $('#errMsg').style.display = 'none'; $('#okMsg').style.display = 'none';
+  $('#pairBox').style.display = 'none'; $('#pairHint').style.display = 'none';
+  var body = { phone: phone };
+  if (replaceId) body.replace = replaceId;
+  fetch('/api/public/pair', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) throw new Error(d.error || 'Could not create the pairing code.');
+      curId = d.id;
+      $('#pairCode').textContent = d.code;
+      $('#pairBox').style.display = 'block';
+      $('#pairHint').style.display = 'block';
+      $('#pairNew').style.display = '';
+      startPoll();
+      btn.disabled = false; btn.textContent = 'Get pairing code';
+    })
+    .catch(function (e) {
+      fail(e.message);
+      btn.disabled = false; btn.textContent = 'Get pairing code';
+    });
+}
+$('#pairBtn').addEventListener('click', function () { requestPairCode(''); });
+$('#pairNew').addEventListener('click', function () { requestPairCode(curId || ''); });
+</script>
+</body>
+</html>
