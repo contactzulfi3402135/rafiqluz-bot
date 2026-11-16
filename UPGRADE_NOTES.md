@@ -1,3 +1,38 @@
+# UPGRADE_NOTES — v1.1.2 · channel names, manual refresh, no "Add all", login restyle (2026-09-16)
+
+**User report (verbatim, 5 asks):** "i see some channels name written in numbsers fix it / refresh it manually when i click on refresh … if i unfollowed or followed new channel shows there / remove add all option, i will select and add / in AI … it just feels like refresh automatically, there is option to refresh so remove automatic refresh / admin sign in is still that bare html look, no css"
+
+## Fixes
+| # | Ask | Fix |
+|---|---|---|
+| 1 | Channel names shown as bare numbers | New `chanLbl(name, jid)` helper (wraps existing `chanName`) — a stored name that is a bare number/jid renders as **"Channel •last4"**, never digits. Applied to **14 display sites**: Sources/Targets picker, scheduler target dropdowns (×3), Map modal (header + rows), Rule card title, routing matrix (headers + rows), routing rules list, Posts source cell + source filter, AI goal rows, activity-chart source rows, followed-channels banner, Signal Desk `sourceName()` |
+| 2 | Manual Refresh must reflect follows/unfollows | `#srcRefresh` now finishes with a **full `loaders.sources()` re-render** (table + count + subscribers **and** the "you follow N channels" banner) after the live WhatsApp follow-state check (`/api/directory/rescan` → `channels.scanChannels()`: name/role refresh, 2-strike unfollow removal, grace period kept) |
+| 3 | Remove "Add all" | The `srcSyncAll` button is gone. The followed-channels banner is now a **list — one row per channel with its own Add button** (existing `/api/browse/add-source` endpoint, per-jid; row disappears on success, banner hides when empty). Owner picks exactly which followed channels become Sources |
+| 4 | Remove automatic refresh | Three auto-refresh loops deleted: (a) **10-minute background channel resync** (`setInterval resyncChannels`), (b) **background directory auto-rescan** on opening Sources (`srcAutoRescan`), (c) **AI assistant 8-second auto-reload** while the panel is open. What remains: event-driven updates (open panel / send / add / remove / pause re-render in place) + a **new manual Refresh button in the AI assistant header** (`#robotRefresh`). Reconnect-time resync (state change, announced via toast) is intentionally kept |
+| 5 | Admin sign-in bare HTML | Root cause: the reskin **dropped the entire `.login-*` CSS block** from app.css — login.ejs referenced 9 classes that no longer existed. Rebuilt the block on the current reskin tokens: centered card (surface-1, border-1, r-card, layered shadow), emerald radial glow on the page bg, 42px inputs (surface-2, accent focus ring 3px), error box on error-soft, `btn-block` added, ≤480px phone layout. Works in dark and light themes |
+
+## Files changed
+- `src/web/assets/app.js` — `chanLbl()` helper; 14 name-display sites; banner rewrite (per-channel Add); srcRefresh → full re-render; 3 auto-refresh loops removed; `#robotRefresh` wiring
+- `src/web/assets/app.css` — appended: banner-list styles (`.ssb-*`), rebuilt `.login-*` block, `.btn-block`; cache-bust `?v=s15`
+- `src/web/views/dashboard.ejs` — `#robotRefresh` icon button in the AI panel header; cache-bust `app.css?v=s15` / `app.js?v=s14`
+- `src/web/views/login.ejs` — cache-bust `app.css?v=s15`
+
+## Kept on purpose (logged decisions)
+- Server-side **Auto-monitor** (new channels followed on the phone enter the directory when they post) is a data-ingestion switch, not a UI auto-refresh — untouched, still OFF by default
+- Reconnect resync on WhatsApp link/relink (one-shot, toast-announced) — a genuine state change, not polling
+- `.ch-jid`/`.cp-jid` columns still show the raw ID — that is the ID column, not the name column
+- WA inbox contact names (chat mirror) keep WA's own name-or-number behavior — v600 "mirror never themed" constraint
+
+## Verification (live server, 2026-09-16)
+- `node --check` app.js OK; app.css brace depth 0 / min 0; comment balance intact
+- Puppeteer: /login desktop 1440 + phone 390 — card styled (bg/border/radius/focus ring verified via computed styles), no console errors
+- Puppeteer: Sources banner rendered from stubbed `followedMissing` (numeric name → "Channel •last4", real name → as-is); per-channel Add click → API hit + row removed + banner hidden when empty
+- Puppeteer: AI panel auto-refresh check — with the panel open for 12 s, `/api/ai/chat` requested exactly once (was ~2–3 with the 8 s timer); manual `#robotRefresh` click fires a new request
+- Ship gate: API probes 200 · 33/33 switches OFF (original keys) · SSE 200 · 25 views · 518 ids (was 517, +robotRefresh) · css balanced · no CDN in ejs
+
+---
+
+
 # UPGRADE_NOTES — v1.1.1 · phone pass + overlap fixes (2026-11-15)
 
 **User report:** "i'll see some mixed up like getting into each other and also make it for phone so it works for phone." Design reference supplied: `uploads/raqifluz-dashboard-redesigned.html` (light "Signal Desk" mockup) — treated as the phone's target look.

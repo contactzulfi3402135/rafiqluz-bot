@@ -2350,3 +2350,71 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 @media (max-width: 1023px) {
   .duo, .comp2 { grid-template-columns: 1fr; }
 }
+
+/* ── v7.10 · followed-channels banner — per-channel Add (owner picks, no "Add all") ── */
+.src-sync-banner { display: block; margin-bottom: 14px; }
+.src-sync-banner .ssb-head { font-size: 13px; margin-bottom: 8px; }
+.src-sync-banner .ssb-list { display: grid; gap: 6px; }
+.src-sync-banner .ssb-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--surface-1); border: 1px solid var(--border-1);
+}
+.src-sync-banner .ssb-name {
+  font-size: 13.5px; font-weight: 550; color: var(--text-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.src-sync-banner .ssb-row .btn { flex: none; }
+@media (max-width: 480px) {
+  .src-sync-banner .ssb-row { flex-wrap: wrap; }
+  .src-sync-banner .ssb-row .btn { margin-left: auto; }
+}
+
+/* ── v7.10 · LOGIN — reskin-matched (the pre-reskin block was lost in the
+     reskin, leaving /login as bare HTML; rebuilt on the current tokens) ── */
+.btn-block { width: 100%; }
+.login-body {
+  display: grid; place-items: center; min-height: 100vh; padding: 20px;
+  background:
+    radial-gradient(900px 480px at 50% -12%, var(--accent-soft), transparent 62%),
+    var(--bg);
+  font-family: var(--font); color: var(--text-1);
+  -webkit-font-smoothing: antialiased;
+}
+.login-card {
+  width: min(400px, 100%);
+  background: var(--surface-1);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-card);
+  box-shadow: var(--sh-1), 0 18px 40px -18px rgba(15, 23, 42, .22);
+  padding: 34px 30px 26px;
+  display: grid; gap: 13px; text-align: center;
+}
+[data-theme="dark"] .login-card { box-shadow: 0 1px 2px rgba(0,0,0,.4), 0 22px 48px -20px rgba(0, 0, 0, .65); }
+.login-logo { display: grid; place-items: center; margin-bottom: 2px; }
+.login-card h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -.01em; color: var(--text-1); }
+.login-sub { margin: -7px 0 3px; color: var(--text-3); font-size: 13px; }
+.login-error {
+  background: var(--error-soft); color: var(--error-text);
+  border-radius: 8px; padding: 9px 12px; font-size: 13px; text-align: left;
+}
+.login-card form { display: grid; gap: 12px; text-align: left; margin-top: 6px; }
+.login-card label { display: grid; gap: 6px; font-size: 13px; font-weight: 550; color: var(--text-2); }
+.login-card input {
+  width: 100%; box-sizing: border-box;
+  height: 42px; padding: 0 12px;
+  background: var(--surface-2); color: var(--text-1);
+  border: 1px solid var(--border-1); border-radius: 8px;
+  font-size: 14px; font-family: inherit;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.login-card input::placeholder { color: var(--text-3); }
+.login-card input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.login-foot { margin: 2px 0 0; color: var(--text-3); font-size: 12px; }
+@media (max-width: 480px) {
+  .login-body { padding: 14px; align-items: start; padding-top: 12vh; }
+  .login-card { padding: 26px 20px 22px; }
+}

@@ -37,6 +37,9 @@ const chanName = (c) => {
   if (n && n !== c.jid && !/^\d+(@[a-z.]+)?$/i.test(n)) return n;
   return 'Channel •' + String(c.jid).split('@')[0].slice(-4);
 };
+/* v7.10: every channel-name display goes through chanName — a stored name that
+   is a bare number/jid is shown as "Channel •last4", never as raw digits. */
+const chanLbl = (name, jid) => chanName({ name: String(name || '').trim(), jid: String(jid || '') });
 const shortJid = (j) => esc(String(j || '').replace('@newsletter', ''));
 const fmtNum = (n) => {
   n = Number(n) || 0;
@@ -633,7 +636,9 @@ async function refreshChannels(kind, opts = {}) {
   }
 }
 function resyncChannels(announce) { refreshChannels('sources', { announce }); refreshChannels('targets', { announce }); }
-setInterval(() => resyncChannels(false), 10 * 60 * 1000); // N1b: every 10 minutes
+/* v7.10: the 10-minute background resync is REMOVED on owner request —
+   lists only change on (a) a manual Refresh click, (b) reconnect, or
+   (c) the action itself (add/remove/pause re-renders in place). */
 /* v7.7.3: Refresh asks WhatsApp itself — live follow-state check (names, roles,
    unfollow removal) — then re-renders the list. */
 $('#srcRefresh').addEventListener('click', async () => {
@@ -646,7 +651,9 @@ $('#srcRefresh').addEventListener('click', async () => {
     toast('Channel check done — ' + parts.join(' · '), r.removed && r.removed.length ? 'warn' : 'ok');
   } catch (e) { toast('Channel check failed: ' + e.message, 'err'); }
   try { if (b) b.disabled = false; } catch { }
-  await refreshChannels('sources', { announce: true });
+  /* v7.10: full re-render — table, count, subscribers AND the "you follow
+     N channels" banner (a fresh follow/unfollow changes both). */
+  await loaders.sources().catch(() => { });
 });
 $('#tgtRefresh').addEventListener('click', () => { toast('Re-syncing targets…'); refreshChannels('targets', { announce: true }); });
 
@@ -1022,7 +1029,7 @@ function fillSchedTargets(list) {
   const sel = $('#schedTarget');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">— target channel —</option>' + (list || []).map((t) => `<option value="${esc(t.jid)}">${esc(t.name || shortJid(t.jid))}</option>`).join('');
+  sel.innerHTML = '<option value="">— target channel —</option>' + (list || []).map((t) => `<option value="${esc(t.jid)}">${esc(chanLbl(t.name, t.jid))}</option>`).join('');
   if (cur) sel.value = cur;
 }
 
@@ -1306,11 +1313,11 @@ async function openMapModal(jid) {
   const mapped = String(src.targets || '').split(',').map((x) => x.trim()).filter(Boolean);
   const m = openModal({
     title: 'Publish this source to…', icon: ico('route'),
-    html: `<p class="muted tiny">${esc(src.name || shortJid(jid))} — tick the target(s) this source should publish to. Untick everything to publish to ALL active targets.</p>
+    html: `<p class="muted tiny">${esc(chanLbl(src.name, jid))} — tick the target(s) this source should publish to. Untick everything to publish to ALL active targets.</p>
       <div style="margin-top:12px;display:grid;gap:8px">
       ${targets.length ? targets.map((t) => `
         <label class="sw-card" style="cursor:pointer"><input type="checkbox" value="${esc(t.jid)}" style="accent-color:var(--accent)" ${mapped.includes(t.jid) ? 'checked' : ''}>
-        <span class="s-txt"><span class="s-name">${esc(t.name || shortJid(t.jid))}</span>${t.paused ? ' <span class="b b-warn">paused</span>' : ''}</span></label>`).join('')
+        <span class="s-txt"><span class="s-name">${esc(chanLbl(t.name, t.jid))}</span>${t.paused ? ' <span class="b b-warn">paused</span>' : ''}</span></label>`).join('')
       : '<p class="muted">No targets yet — add them in the Targets tab.</p>'}
       </div>`,
     primaryLabel: 'Save mapping',
@@ -1331,7 +1338,7 @@ async function openRulesModal(jid) {
   if (!src) return toast('Source not found', 'err');
   const r = (rules.list || []).find((x) => x.source_jid === jid) || {};
   const m = openModal({
-    title: 'Rule card — ' + (src.name || shortJid(jid)), icon: ico('sliders'),
+    title: 'Rule card — ' + chanLbl(src.name, jid), icon: ico('sliders'),
     html: `
       <label class="sw-card" style="cursor:pointer;margin-bottom:12px"><input type="checkbox" id="ruleApprove" ${r.approve_first ? 'checked' : ''} style="accent-color:var(--accent)">
         <span class="s-txt"><span class="s-name">Approve first</span><span class="s-desc">Every post from this source waits in the Approval Queue for your OK (needs the Approval queue switch ON)</span></span></label>
@@ -1384,13 +1391,13 @@ loaders.sources = async () => {
   refreshPicker('sources');
   paintSubs(); // 5I (I1): subscriber counts + 14-day growth sparkline (best-effort)
   srcFollowedBanner(d.followedMissing || []); // v7.9: followed → one click into Sources
-  srcAutoRescan();                            // v7.9: pick up recent phone-follows
 };
 /* v7.9: channels this account follows on WhatsApp that are not in Sources yet
-   → a one-click banner above the table (works whether or not Auto-monitor is on). */
+   → a list above the table (works whether or not Auto-monitor is on).
+   v7.10: "Add all" removed on owner request — each channel gets its own Add
+   button; the owner picks exactly which followed channels become Sources. */
 function srcFollowedBanner(missing) {
   let box = document.getElementById('srcSyncBanner');
-  if (!missing.length) { if (box) box.hidden = true; return; }
   if (!box) {
     box = document.createElement('div');
     box.id = 'srcSyncBanner';
@@ -1398,37 +1405,31 @@ function srcFollowedBanner(missing) {
     const host = document.querySelector('#srcTable') && document.querySelector('#srcTable').closest('.card-b');
     if (host) host.prepend(box); else return;
   }
-  const names = missing.slice(0, 4).map((m) => esc(m.name)).join(', ') + (missing.length > 4 ? ` +${missing.length - 4} more` : '');
+  if (!missing.length) { box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = `<span>You follow <b>${missing.length}</b> WhatsApp channel(s) that aren't in Sources yet — ${names}</span><button class="btn btn-sm btn-p" id="srcSyncAll">Add all ${missing.length} to Sources</button>`;
-  document.getElementById('srcSyncAll').addEventListener('click', async (ev) => {
-    const b = ev.target; b.disabled = true;
+  box.innerHTML = `<div class="ssb-head">You follow <b>${missing.length}</b> WhatsApp channel(s) that aren't in Sources yet — add the ones you want:</div>
+    <div class="ssb-list">${missing.map((m) => `
+      <div class="ssb-row" data-jid="${esc(m.jid)}">
+        <span class="ssb-name" title="${esc(m.jid)}">${esc(chanLbl(m.name, m.jid))}</span>
+        <button class="btn btn-sm btn-p" data-add="${esc(m.jid)}">Add</button>
+      </div>`).join('')}</div>`;
+  $$('.ssb-row [data-add]', box).forEach((b) => b.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget; const row = btn.closest('.ssb-row');
+    btn.disabled = true; btn.textContent = 'Adding…';
     try {
-      const r = await api('/api/sources/sync-followed', { method: 'POST' });
-      toast(`Added ${r.count} followed channel(s) to Sources`, 'ok');
-      box.hidden = true;
+      await api('/api/browse/add-source', { method: 'POST', body: { jid: b.dataset.add } });
+      toast('Added to Sources', 'ok');
+      if (row) row.remove();
+      if (!box.querySelector('.ssb-row')) box.hidden = true;
       loaders.sources().catch(() => { });
-    } catch (e) { toast(e.message, 'err'); b.disabled = false; }
-  });
+    } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = 'Add'; }
+  }));
 }
-/* v7.9: if WhatsApp is linked and the last directory scan is stale, run one in
-   the background so channels followed on the phone reach Sources without the
-   user having to press Refresh (5-minute client cooldown — no loops). */
-let __srcRescanning = false, __lastAutoRescan = 0;
-async function srcAutoRescan() {
-  if (__srcRescanning || Date.now() - __lastAutoRescan < 5 * 60 * 1000) return;
-  try {
-    const dir = await api('/api/directory');
-    const lastAt = dir.scan && dir.scan.at ? Date.parse(dir.scan.at) : 0;
-    if (dir.wa && dir.wa.status === 'open' && Date.now() - lastAt > 2 * 60 * 1000) {
-      __srcRescanning = true;
-      __lastAutoRescan = Date.now();
-      await api('/api/directory/rescan', { method: 'POST' });
-      loaders.sources().catch(() => { });
-    }
-  } catch { /* best effort */ }
-  finally { __srcRescanning = false; }
-}
+/* v7.10: the background directory auto-rescan (added v7.9) is REMOVED on
+   owner request — it made the Sources tab look like it refreshed by itself.
+   Everything is manual now: press Refresh to re-check follow state with
+   WhatsApp; new channels followed on the phone still land in the directory
+   server-side when they post (Auto-monitor), and appear after a Refresh. */
 /* 5I (I1): fill the Subscribers column from /api/subs — count + tiny sparkline.
    Best-effort: WhatsApp may not return the number yet; the cell then says so. */
 let __subsCache = null;
@@ -1667,9 +1668,9 @@ async function renderMatrix() {
       return;
     }
     box.innerHTML = `<div class="tw"><table class="t mtx">
-      <thead><tr><th>Source ↓ / Target →</th>${__mtx.targets.map((t) => `<th class="mtx-h" title="${esc(t.jid)}">${esc((t.name || shortJid(t.jid)).slice(0, 10))}</th>`).join('')}</tr></thead>
+      <thead><tr><th>Source ↓ / Target →</th>${__mtx.targets.map((t) => `<th class="mtx-h" title="${esc(t.jid)}">${esc(chanLbl(t.name, t.jid).slice(0, 10))}</th>`).join('')}</tr></thead>
       <tbody>${__mtx.sources.map((s) => `<tr>
-        <td class="mtx-src" title="${esc(s.jid)}">${esc(s.name || shortJid(s.jid))}</td>
+        <td class="mtx-src" title="${esc(s.jid)}">${esc(chanLbl(s.name, s.jid))}</td>
         ${__mtx.targets.map((t) => matrixCell(s.jid, t.jid, t.name)).join('')}
       </tr>`).join('')}</tbody></table></div>
       <p class="muted tiny" style="margin-top:10px">Click a cell to cycle: <b>· default</b> (mapping behavior) → <b class="b b-ok">ON</b> forced → <b class="b b-warn">OFF</b> forced → back to default. Every click saves immediately.</p>`;
@@ -1769,7 +1770,9 @@ let __queueTab = 'approvals';
 /* v11 · Signal Desk queue card — source letter-square + target chips (mockup 03).
    Behavior unchanged: same data-q actions, same edit/retry wiring below. */
 function sourceName(jid) {
-  return String((window.__dirNames && window.__dirNames[jid]) || (jid ? shortJid(jid) : '') || '—');
+  const dn = (window.__dirNames && window.__dirNames[jid]) || '';
+  if (dn) return chanName({ name: dn, jid });
+  return jid ? chanName({ name: '', jid }) : '—';
 }
 function initialsOf(name) {
   const words = String(name).trim().split(/\s+/).filter(Boolean);
@@ -1967,7 +1970,7 @@ loaders.power = async () => {
   $('#routingList').innerHTML = all.map((c) => {
     const r = (p.routing || []).find((x) => x.jid === c.jid) || {};
     return `<div class="route-row" data-jid="${esc(c.jid)}">
-      <div class="r-name" title="${esc(c.jid)}">${esc(c.name || shortJid(c.jid))}</div>
+      <div class="r-name" title="${esc(c.jid)}">${esc(chanLbl(c.name, c.jid))}</div>
       <input class="in" placeholder="only if it contains…" value="${esc(r.include || '')}" data-f="include">
       <input class="in" placeholder="never if it contains…" value="${esc(r.exclude || '')}" data-f="exclude">
       <select class="in" data-f="type" title="Post type filter">
@@ -2553,7 +2556,7 @@ const postsRowHtml = (p, canEdit) => {
     <tr data-pid="${p.id}" data-sjid="${esc(p.source_jid)}" data-smid="${esc(p.source_msg_id)}" class="rowqa">
       <td><input type="checkbox" class="post-sel" data-targets="${esc((p.keys || []).map((k) => k.target_jid + '|' + k.msg_id).join(','))}" aria-label="Select post"></td>
       <td class="tiny num">${when(p.created_at)}</td>
-      <td class="muted tiny">${p.source_name ? esc(p.source_name) : shortJid(p.source_jid)}${viaChips}${split}</td>
+      <td class="muted tiny">${esc(chanLbl(p.source_name, p.source_jid))}${viaChips}${split}</td>
       <td><span class="b ${p.status === 'published' ? 'b-ok' : p.status === 'skipped' ? 'b-warn' : p.status === 'failed' ? 'b-err' : 'b-info'}">${esc(p.status)}</span>${p.pub_ms ? `<div class="muted tiny" title="Source publish → bot publish">+${Math.round(p.pub_ms / 1000)} s</div>` : ''}</td>
       <td class="muted tiny">${esc((p.reason || '').slice(0, 90))}</td>
       <td><div class="ra prow-acts">${acts.join('')}</div><div class="qa-menu" data-qamenu></div></td>
@@ -2731,7 +2734,7 @@ loaders.posts = async () => {
   /* 5B (R53): source filter options */
   const pf = $('#pfSource');
   const cur = pf.value;
-  const srcs = [...new Map(__postsCache.map((p) => [p.source_jid, p.source_name || shortJid(p.source_jid)])).entries()];
+  const srcs = [...new Map(__postsCache.map((p) => [p.source_jid, chanLbl(p.source_name, p.source_jid)])).entries()];
   pf.innerHTML = '<option value="">All sources</option>' + srcs.map(([jid, name]) => `<option value="${esc(jid)}">${esc(name)}</option>`).join('');
   if (cur) pf.value = cur;
   postsApplyFilters();
@@ -2747,7 +2750,7 @@ function fillUndoTarget(list) {
   const sel = $('#undoTarget');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">— target channel —</option>' + (list || []).map((t) => `<option value="${esc(t.jid)}">${esc(t.name || shortJid(t.jid))}</option>`).join('');
+  sel.innerHTML = '<option value="">— target channel —</option>' + (list || []).map((t) => `<option value="${esc(t.jid)}">${esc(chanLbl(t.name, t.jid))}</option>`).join('');
   if (cur) sel.value = cur;
 }
 $('#undoBtn').addEventListener('click', async () => {
@@ -2764,7 +2767,7 @@ $('#undoBtn').addEventListener('click', async () => {
 function fillPurgeTarget(list) {
   const sel = $('#purgeTarget');
   const cur = sel.value;
-  sel.innerHTML = '<option value="">— target channel —</option>' + (list || []).map((t) => `<option value="${esc(t.jid)}">${esc(t.name || shortJid(t.jid))}</option>`).join('');
+  sel.innerHTML = '<option value="">— target channel —</option>' + (list || []).map((t) => `<option value="${esc(t.jid)}">${esc(chanLbl(t.name, t.jid))}</option>`).join('');
   if (cur) sel.value = cur;
 }
 $('#postsRefresh').addEventListener('click', () => loaders.posts());
@@ -2905,7 +2908,7 @@ loaders.analytics = async () => {
   }
   const allSources = await api('/api/sources').catch(() => ({ list: [] }));
   const goalRows = (goals.list || []).map((g) => {
-    const name = (window.__dirNames && window.__dirNames[g.source_jid]) || (allSources.list || []).find((s) => s.jid === g.source_jid)?.name || shortJid(g.source_jid);
+    const name = chanLbl((window.__dirNames && window.__dirNames[g.source_jid]) || (allSources.list || []).find((s) => s.jid === g.source_jid)?.name || '', g.source_jid);
     const met = g.daily_n > 0 && g.today >= g.daily_n;
     return `<tr data-gjid="${esc(g.source_jid)}"><td>${esc(name)}</td>
       <td class="num"><input class="in num g-n" type="number" min="0" max="999" value="${g.daily_n}" style="width:64px;height:26px;font-size:var(--t13)"></td>
@@ -2929,7 +2932,7 @@ loaders.analytics = async () => {
   let dirNames = window.__dirNames;
   if (!dirNames) { try { const dir = await api('/api/directory'); window.__dirNames = dirNames = Object.fromEntries((dir.list || []).map((c) => [c.jid, c.name])); } catch (e) {} }
   $('#anSources tbody').innerHTML = (d.sources || []).map((s) => {
-    const name = (dirNames && dirNames[s.jid]) || shortJid(s.jid);
+    const name = chanLbl((dirNames && dirNames[s.jid]) || '', s.jid);
     return `<tr><td>${esc(name)}</td><td class="num"><b>${s.n}</b></td></tr>`;
   }).join('') || (await emptyTCell('chart', 'Nothing published in this range', 'try a wider range', 2));
 };
@@ -4185,7 +4188,11 @@ $('#aiChatClear').addEventListener('click', async () => {
   fab.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } toggle(); });
   fab.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') toggle(); });
   $('#robotClose').addEventListener('click', (ev) => { ev.stopPropagation(); toggle(false); });
-  setInterval(() => { if (open && !panel.hidden) loaders.aichat().catch(() => {}); }, 8000);
+  /* v7.10: the 8-second auto-reload is REMOVED on owner request — the panel
+     only reloads when opened, after each send, or via the manual Refresh
+     button in its header (wired below). */
+  const rr = $('#robotRefresh');
+  if (rr) rr.addEventListener('click', () => { loaders.aichat().catch(() => { }); });
   const applyPos = (el, x, y) => {
     const w = el.offsetWidth || 100, h = el.offsetHeight || 100;
     el.style.left = Math.min(Math.max(4, x), Math.max(4, window.innerWidth - w - 4)) + 'px';

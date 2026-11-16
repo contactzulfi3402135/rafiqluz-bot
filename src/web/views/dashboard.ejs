@@ -24,7 +24,7 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=s14">
+<link rel="stylesheet" href="/app.css?v=s15">
 </head>
 <body>
 <div class="app" id="app">
@@ -1902,6 +1902,7 @@ try {
     <span class="rtitle"><%- icon('robot','icon icon-xs') %> AI assistant</span>
     <label class="sw" title="When ON, the AI can act on your behalf. Every action shows as a tool line here and in Logs. Off by default."><input type="checkbox" id="aiControlToggle"><i></i><span class="rctl-lbl">Bot control</span></label>
     <button class="icon-btn" id="robotExpand" title="Expand / restore chat" aria-label="Expand chat"><%- icon('expand','icon icon-xs') %></button>
+    <button class="icon-btn" id="robotRefresh" title="Refresh assistant (manual — it never auto-refreshes)" aria-label="Refresh assistant"><%- icon('refresh','icon icon-xs') %></button>
     <button class="icon-btn" id="aiChatClear" title="Clear chat history" aria-label="Clear history"><%- icon('trash','icon icon-xs') %></button>
     <button class="icon-btn" id="robotClose" title="Close" aria-label="Close"><%- icon('x','icon icon-xs') %></button>
     <span class="rstate muted" id="robotState"></span>
@@ -1913,6 +1914,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=s13"></script>
+<script src="/app.js?v=s14"></script>
 </body>
 </html>
