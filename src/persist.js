@@ -2,6 +2,14 @@
 /**
  * v7.2.0 — cloud memory (the "never scan a QR again" engine), rebuilt.
  *
+ * v11.0.1 (v1.1.4) — cloud memory is now bulletproof against repo bloat:
+ *   the ref-endpoint URLs in pushReplacing were missing the mandatory
+ *   "heads/" prefix, so every replace-push 409'd and every save fell back
+ *   to the classic APPEND (one ~3 MB commit per cycle — a 4 GB branch in
+ *   4 days). Fixed, plus a save ladder: replace → reset (delete+recreate,
+ *   self-heals a bloated branch) → capped classic append → self-protect
+ *   skip. No token/permission combination can grow the branch again.
+ *
  * v7.2 fixes the two bugs that made QR re-scans look unavoidable:
  *   1. the state was WRITTEN to the configured branch (bot-state) but READ
  *      from the repo's default branch — so every restart found nothing and
@@ -52,7 +60,9 @@ const status = {
   enabled: false, repo: '', branch: '', lastSyncAt: '', lastSyncReason: '',
   lastError: '', lastBytes: 0, lastRestoreAt: '', restoredFiles: 0, branchReady: false, boots: 0,
   /* v9.0.0 (repo-slim): change detection + skip accounting */
-  lastHash: '', lastSkipAt: '', skips: 0
+  lastHash: '', lastSkipAt: '', skips: 0,
+  /* v11.0.1 (v1.1.4): save-ladder visibility */
+  lastPushMode: '', branchCommits: 0
 };
 let lastHash = '';   // hash of the last uploaded snapshot — identical state = no new GitHub blob
 
@@ -212,17 +222,54 @@ async function upload(force = false) {
        pile up and the repo stays small (the 2 GB bloat fix). If any step
        fails, fall back to the classic Contents-API push (appends commits —
        always worked, just grows history). */
+    /* v11.0.1 (v1.1.4) — bulletproof save ladder. The state branch must
+       NEVER grow:
+       1) replace-push keeps it at a SINGLE commit (force ref update);
+       2) if the ref update is refused, DELETE + recreate resets the branch
+          to one commit — this is also what self-heals an ALREADY bloated
+          branch on the first save after an upgrade (the old history becomes
+          unreachable and GitHub drops those blobs on its next GC);
+       3) if the refs API is entirely blocked but Contents writes work, we
+          append via the classic API — but only while the branch is under
+          the commit cap;
+       4) beyond the cap we REFUSE to append: the save is skipped with a
+          loud warning, so the repo is protected no matter which API the
+          token can reach. */
     let saved = false;
+    let mode = null;
     try {
-      saved = await pushReplacing(content);
-    } catch (e) {
-      ring.warn('persist.fallback', `Replace-push failed (${e.message}) — using classic push.`);
+      await pushReplacing(content);
+      mode = 'replace';
+      saved = true;
+    } catch (e1) {
+      ring.warn('persist.replace.fail', `Replace-push failed (${e1.message}) — trying branch reset.`);
+      try {
+        await pushReset(content);
+        mode = 'reset';
+        saved = true;
+        status.branchCommits = 1;
+        ring.info('persist.reset', `Branch "${C.branch}" reset to a single commit — older copies are unreachable now and GitHub drops them on its next garbage collection.`);
+      } catch (e2) {
+        const n = await branchCommitCount();
+        if (n === null || n <= MAX_BRANCH_COMMITS) {
+          await pushClassic(content);
+          mode = 'classic';
+          saved = true;
+          status.branchCommits = (n || 0) + 1;
+          ring.warn('persist.classic.fallback', `Ref API unavailable (${e2.message}) — appended via Contents API; branch ≈ ${status.branchCommits}/${MAX_BRANCH_COMMITS} commits. Give the token Contents read+write so saves stop growing history.`);
+        } else {
+          status.lastError = `Self-protect: branch "${C.branch}" already has ${n} commits (cap ${MAX_BRANCH_COMMITS}) and replace/reset pushes failed — save skipped to protect the repo. Check the cloud-memory token (Contents: read+write), or delete the branch once on GitHub (Settings → Branches).`;
+          ring.warn('persist.selfprotect', status.lastError);
+          throw new Error(status.lastError);
+        }
+      }
     }
-    if (!saved) saved = await pushClassic(content);
     if (saved) {
       lastHash = snap.hash;
       status.lastBytes = snap.size;
       status.lastHash = snap.hash.slice(0, 16);
+      status.lastPushMode = mode;
+      if (mode === 'replace') status.branchCommits = 1;
     }
     return saved ? 'saved' : false;
   } finally {
@@ -248,9 +295,15 @@ async function compactNow() {
   };
 }
 
-/** Push state as a fresh ROOT commit and force-update the branch ref.
-    Branch history = exactly 1 commit, forever. */
-async function pushReplacing(content) {
+/* v11.0.1 (v1.1.4): the state branch's commit cap. Normal operation keeps it
+   at exactly ONE commit (replace-push). If a save ever falls back to the
+   classic Contents-API append, the branch must never exceed this many
+   commits — beyond that, saves are skipped (see the upload ladder above). */
+const MAX_BRANCH_COMMITS = 25;
+
+/** Create a fresh ROOT commit (blob + tree + commit) for the snapshot.
+    @returns the new commit sha */
+async function makeRootCommit(content) {
   const msg = `bot-state ${new Date().toISOString()}`;
   let r = await fetch(`${base()}/git/blobs`, { method: 'POST', headers: headers(), body: JSON.stringify({ content, encoding: 'base64' }) });
   if (!r.ok) throw new Error(`blob HTTP ${r.status}`);
@@ -260,15 +313,55 @@ async function pushReplacing(content) {
   const treeSha = (await r.json()).sha;
   r = await fetch(`${base()}/git/commits`, { method: 'POST', headers: headers(), body: JSON.stringify({ message: msg, tree: treeSha }) });
   if (!r.ok) throw new Error(`commit HTTP ${r.status}`);
-  const commitSha = (await r.json()).sha;
-  const refExists = await fetch(`${base()}/git/ref/${C.branch}`, { headers: headers() }).then((x) => x.ok).catch(() => false);
-  r = await fetch(`${base()}/git/refs/${C.branch}`, {
-    method: refExists ? 'PUT' : 'POST',
-    headers: headers(),
-    body: JSON.stringify(refExists ? { sha: commitSha, force: true } : { ref: `refs/heads/${C.branch}`, sha: commitSha }),
-  });
+  return (await r.json()).sha;
+}
+
+/** Push state as a fresh ROOT commit and force-update the branch ref.
+    Branch history = exactly 1 commit, forever.
+    NOTE (the 4 GB bug, fixed in v11.0.1): the GitHub ref endpoints require
+    the FULL ref name — refs/heads/<branch>. The v7.6.0 code called
+    /git/ref/<branch> and /git/refs/<branch> WITHOUT "heads/", so the
+    existence check always 404'd, the "create new ref" call always 409'd
+    (ref already exists), and every single save silently fell back to the
+    classic append — piling up one ~3 MB commit every cycle (2,008 copies
+    = 4.2 GB). The corrected URLs + the reset ladder below end that. */
+async function pushReplacing(content) {
+  const commitSha = await makeRootCommit(content);
+  const ref = `heads/${C.branch}`;
+  const exists = await fetch(`${base()}/git/ref/${ref}`, { headers: headers() }).then((x) => x.ok).catch(() => false);
+  const r = exists
+    ? await fetch(`${base()}/git/refs/${ref}`, { method: 'PUT', headers: headers(), body: JSON.stringify({ sha: commitSha, force: true }) })
+    : await fetch(`${base()}/git/refs`, { method: 'POST', headers: headers(), body: JSON.stringify({ ref: `refs/heads/${C.branch}`, sha: commitSha }) });
   if (!r.ok) throw new Error(`ref HTTP ${r.status}`);
-  return true;
+}
+
+/** Reset ladder: delete the branch and recreate it with exactly one fresh
+    commit. This is what self-heals an already-bloated branch — after the
+    reset the old history is unreachable and GitHub drops those blobs on
+    its next garbage collection, so a multi-GB branch goes back to ≈ one
+    snapshot. */
+async function pushReset(content) {
+  const commitSha = await makeRootCommit(content);
+  const del = await fetch(`${base()}/git/refs/heads/${C.branch}`, { method: 'DELETE', headers: headers() }).catch(() => null);
+  if (del && !del.ok && del.status !== 404) throw new Error(`branch delete HTTP ${del.status}`);
+  const make = await fetch(`${base()}/git/refs`, {
+    method: 'POST', headers: headers(),
+    body: JSON.stringify({ ref: `refs/heads/${C.branch}`, sha: commitSha })
+  });
+  if (!make.ok) throw new Error(`branch recreate HTTP ${make.status}`);
+}
+
+/** Cheap branch commit count: page number of the last page in the commits
+    list (per_page=1). Returns null when unknown. */
+async function branchCommitCount() {
+  try {
+    const r = await fetch(`${base()}/commits?sha=${encodeURIComponent(C.branch)}&per_page=1`, { headers: headers() });
+    if (!r.ok) return null;
+    const link = String(r.headers.get('link') || '');
+    const last = (link.match(/<([^>]+)>;\s*rel="last"/) || [])[1];
+    const pm = last && last.match(/[?&]page=(\d+)/);
+    return pm ? parseInt(pm[1], 10) : 1;
+  } catch { return null; }
 }
 
 /** Classic Contents-API push (one commit appended per save). */
@@ -483,7 +576,9 @@ function publicStatus() {
     restoredFiles: status.restoredFiles, lastRestoreAt: status.lastRestoreAt,
     intervalMin: C.intervalMin, credsPresent: credsPresent(),
     /* v9.0.0 (repo-slim) */
-    lastHash: status.lastHash, skips: status.skips, lastSkipAt: status.lastSkipAt
+    lastHash: status.lastHash, skips: status.skips, lastSkipAt: status.lastSkipAt,
+    /* v11.0.1 (v1.1.4): which ladder rung the last save used + branch size */
+    lastPushMode: status.lastPushMode, branchCommits: status.branchCommits
   };
 }
 
@@ -538,6 +633,10 @@ async function diagnose() {
   const info = await repo.json().catch(() => ({}));
   const ref = await fetch(`${base()}/git/ref/heads/${encodeURIComponent(C.branch)}`, { headers: headers() }).catch(() => null);
   out.branchExists = Boolean(ref?.ok);
+  out.branchCommits = out.branchExists ? await branchCommitCount() : null;   /* v11.0.1 (v1.1.4) */
+  if (out.branchCommits && out.branchCommits > 25) {
+    out.verdict = `⚠️ Branch "${C.branch}" has ${out.branchCommits} commits — history is bloated. The next save will reset it to a single commit automatically; GitHub reclaims the old size on its next garbage collection (a few days).`;
+  }
   out.stateOnBranch = Boolean(await getState(C.branch));
   out.stateOnDefault = Boolean(await getState(null));
   if (!info.default_branch) {

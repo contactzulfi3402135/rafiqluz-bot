@@ -10,3 +10,6 @@ backups/
 .patch*.js
 gate8/
 tmp/
+
+# v1.1.4: cloud-memory snapshot is pushed via the GitHub API only — never commit it
+bot-state.zip

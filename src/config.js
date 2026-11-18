@@ -22,7 +22,7 @@ const PATHS = {
 };
 
 const config = {
-  version: '11.0.0',
+  version: '11.0.1',
   botName: env('BOT_NAME', 'Raqifluz Channel Bot'),
   root: ROOT,
   paths: PATHS,
