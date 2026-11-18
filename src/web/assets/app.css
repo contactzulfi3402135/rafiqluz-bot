@@ -540,6 +540,12 @@ img { max-width: 100%; }
   display: grid; gap: 20px; align-content: start;
   min-height: 100%;
 }
+/* v1.2: a grid item's automatic minimum is its MIN-CONTENT size — a wide table
+   or form inside it used to blow the whole .view track past the viewport
+   (measured: 557px track inside a 393px screen → 176px clipped on mobile).
+   min-width:0 lets the track stay screen-wide; wide children scroll inside
+   their own .tw wrappers instead. */
+.view > * { min-width: 0; }
 
 /* ── mobile topbar & bottom bar (<768) ─────────────────────────── */
 .btabs { display: none; }
@@ -767,10 +773,28 @@ select.in { appearance: none; padding-inline-end: 32px; background-image: linear
 .qchips-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .chips { display: inline-flex; flex-wrap: wrap; gap: 8px; }
 .brw-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+/* v1.2: Discover rows — before, the row divs had no CSS at all, so avatar,
+   name, country and buttons stacked as unstyled blocks (one screen per ~5 rows) */
+.brw-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-1); flex-wrap: wrap; }
+.brw-row:last-child { border-bottom: 0; }
+.brw-av { width: 36px; height: 36px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--accent-15); color: var(--accent); font-weight: 700; font-size: 15px; }
+.brw-info { flex: 1 1 160px; min-width: 0; display: grid; gap: 2px; }
+.brw-info .ch-row-name { font-size: 14px; font-weight: 600; }
+.brw-info .ch-sub { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brw-row .ra { flex: none; display: flex; align-items: center; gap: 8px; }
+@media (max-width: 639px) {
+  .brw-row { gap: 10px; padding: 12px 0; }
+  .brw-row .ra { flex-basis: 100%; justify-content: flex-start; }
+}
 .brw-filters .chip { height: 30px; padding: 0 12px; font-size: 12px; }
 
 /* tables — .tw wrapper + .t table (spec §5.4: 44px rows, no zebra, subtle hover) */
 .tw { overflow-x: auto; border: 1px solid var(--border-1); border-radius: 10px; }
+/* v1.2: a table wider than the screen must announce it can be swiped */
+.tw { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+.tw::-webkit-scrollbar { height: 8px; }
+.tw::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+.tw::-webkit-scrollbar-track { background: transparent; }
 .tw table.t { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 0; }
 .t th {
   text-align: start; padding: 10px 14px;
@@ -1403,6 +1427,12 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .comp2 { grid-template-columns: 1fr; }
 }
 @media (min-width: 768px) and (max-width: 1023px) {
+  /* v1.2: topbar fits 768 — the connection pill used to cover the breadcrumb */
+  .topbar { padding: 0 10px; gap: 6px; }
+  .breadcrumb #crumbGroup, .breadcrumb b { display: none; }
+  .connection-pill .muted, .connection-pill #connName { display: none; }
+  .command-search { min-width: 0; }
+  .command-search kbd { display: none; }
   .app .sidebar { width: var(--sb-rail); padding: 16px 10px 10px; }
   .app .sb-name, .app .brand-sub, .app .sb-item .lbl,
   .app .sb-group .g-txt, .app .side-health span:not(.health-dot),
@@ -1420,6 +1450,9 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 }
 /* phone (spec §6.3: 56px topbar, hamburger, bottom tab bar, 44px targets) */
 @media (max-width: 767px) {
+  /* v1.2: settings rows with a select: control + hint wrap to their own line */
+  .row-form:has(select) { flex-wrap: wrap; row-gap: 6px; }
+  .row-form:has(select) > .muted { flex-basis: 100%; margin-top: 2px; }
   :root { --tb-h: var(--tb-h-m); --maxw: 100%; }
   body { overflow: hidden; }
   .app { flex-direction: column; }
@@ -2204,7 +2237,19 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 /* logs */
 .logs { display: grid; gap: 2px; font-family: var(--mono); font-size: 12px; }
 .ll { display: flex; gap: 12px; padding: 6px 8px; border-radius: 6px; }
+/* v1.2: phone logs — time + level + code on line 1, message full width line 2 */
+@media (max-width: 639px) {
+  .ll { flex-wrap: wrap; row-gap: 3px; gap: 8px; }
+  .ll .ll-code { margin-inline-start: auto; font-size: 11px; }
+  .ll .msg { flex-basis: 100%; }
+}
 .ll:hover { background: var(--surface-2); }
+/* v1.2: empty state — previously unstyled (the icon SVG had no size and
+   stretched to ~500px inside cards like the approval queue) */
+.es { display: grid; justify-items: center; gap: 6px; text-align: center; padding: 28px 16px; }
+.es > svg { width: 40px; height: 40px; opacity: .55; }
+.es-t { font-size: 14px; font-weight: 600; color: var(--text-2); }
+.es-s { font-size: 12.5px; color: var(--text-3); max-width: 40ch; line-height: 18px; }
 .ll-time { color: var(--text-3); flex: none; }
 .ll-code { color: var(--text-2); word-break: break-word; }
 /* pipeline inspector containers */
@@ -2372,6 +2417,10 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .src-sync-banner .ssb-row .btn { flex: none; }
+@media (max-width: 639px) {
+  .view[data-view="scheduled"] .row-form.wrap > .in { flex: 1 1 100%; }
+  .view[data-view="scheduled"] #schedRepeat { flex: 1 1 auto; }
+}
 @media (max-width: 480px) {
   .src-sync-banner .ssb-row { flex-wrap: wrap; }
   .src-sync-banner .ssb-row .btn { margin-left: auto; }
@@ -2421,6 +2470,10 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .login-foot { margin: 2px 0 0; color: var(--text-3); font-size: 12px; }
+@media (max-width: 639px) {
+  .view[data-view="scheduled"] .row-form.wrap > .in { flex: 1 1 100%; }
+  .view[data-view="scheduled"] #schedRepeat { flex: 1 1 auto; }
+}
 @media (max-width: 480px) {
   .login-body { padding: 14px; align-items: start; padding-top: 12vh; }
   .login-card { padding: 26px 20px 22px; }
@@ -2695,7 +2748,7 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .pausebar { padding: 5px 10px; }
   .t td { padding: 5px 10px; }
 
-  .view[data-view="home"] #kpiGrid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .view[data-view="home"] #kpiGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .view[data-view="home"] #kpiGrid .kpi { min-height: 0; padding: 6px 8px; gap: 1px; }
   .view[data-view="home"] .k-v { font-size: 17px; line-height: 20px; }
   .view[data-view="home"] .k-l, .view[data-view="home"] .k-s { font-size: 10px; }
@@ -2826,7 +2879,7 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 @media (min-width: 768px) and (max-width: 1023px) {
   .view[data-view="home"] { gap: 8px; padding: 12px 16px 12px; }
   .view[data-view="home"] .live-badge { display: none; }
-  .view[data-view="home"] .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .view[data-view="home"] .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .view[data-view="home"] .kpis .kpi { min-height: 0; padding: 6px 8px; }
   .view[data-view="home"] .k-v { font-size: 17px; line-height: 22px; }
   .view[data-view="home"] .home-chart-svg { height: 72px; }
@@ -2872,4 +2925,10 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .set-body .card { padding: 8px 12px; }
   .view[data-view="sources"], .view[data-view="approvals"] { gap: 12px; }
   .view[data-view="sources"] .ph-d, .view[data-view="approvals"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+}
+
+/* ── v1.2 — phone settings tabs: wrap onto lines (a hidden horizontal
+   scroller made the cut-off tab look broken) ─────────────────────────── */
+@media (max-width: 767px) {
+  .set-nav, .view[data-view="settings"] .set-nav { overflow: visible; flex-wrap: wrap; row-gap: 6px; }
 }

@@ -187,6 +187,66 @@ async function catchUp(opts = {}) {
 /** read-only listing for the AI (never feeds anything) */
 function missedList(opts) { return catchUp({ ...opts, dryRun: true }); }
 
+/* ---------------- v1.2: name hygiene — a channel must never carry its own
+   number as its name, and a missing name is recoverable from WhatsApp. --- */
+/** True when a stored name is real (not empty, not the jid, not bare digits). */
+function validName(name, jid) {
+  const n = String(name || '').trim();
+  if (!n) return false;
+  if (n === String(jid || '')) return false;
+  if (/^\d+$/.test(n)) return false;
+  if (/^\d+(@[a-z.]+)?$/i.test(n)) return false; // digits with a domain suffix
+  return true;
+}
+
+const nameTriedAt = new Map(); // jid → ms of the last WhatsApp metadata probe
+let resolving = false;
+
+/** Recover real names for channels whose stored name is missing/numeric.
+    Asks WhatsApp (newsletterMetadata) for at most `maxItems` due channels,
+    then writes the name into the directory + sources + targets so every
+    view, log, export and AI prompt sees the real name. 10-minute cooldown
+    per channel, single-flight, best-effort — never blocks or breaks saves. */
+async function resolveMissingNames(maxItems = 4) {
+  if (resolving) return { resolved: [], busy: true };
+  resolving = true;
+  const resolved = [];
+  try {
+    const sock = wa.getSocket();
+    if (!sock || wa.getStatus().status !== 'open') return { resolved, busy: false, noSocket: true };
+    const seen = new Set();
+    const cands = [];
+    for (const row of [...CH.listSources(), ...CH.listTargets(), ...CH.dirList()]) {
+      if (seen.has(row.jid)) continue;
+      seen.add(row.jid);
+      if (!validName(row.name, row.jid)) cands.push(row.jid);
+    }
+    const now = Date.now();
+    const due = cands.filter((j) => (nameTriedAt.get(j) || 0) + 10 * 60e3 < now).slice(0, maxItems);
+    for (const jid of due) {
+      nameTriedAt.set(jid, Date.now());
+      let meta = null;
+      try { meta = await withTimeout(wa.channelMeta(sock, jid), 12000); } catch { meta = null; }
+      if (meta && validName(meta.name, jid)) {
+        CH.recordDir(jid, meta.name, null); // role: COALESCE keeps the old one
+        CH.renameChannel(jid, meta.name);   // sources + targets rows
+        resolved.push({ jid, name: meta.name });
+        ring.info('channel.name.resolved', `Channel name recovered from WhatsApp: “${meta.name}”`);
+        try { AUD.log('system', 'channel.name.resolved', `Recovered the real name “${meta.name}” for a channel that was showing a number`); } catch { }
+      }
+      await new Promise((r) => setTimeout(r, 1200)); // pace the metadata queries
+    }
+    return { resolved, busy: false };
+  } finally { resolving = false; }
+}
+
+/** Clean name for storage: the given name if it's real, else '' (never the jid). */
+const cleanName = (name, jid, fallbackName) => {
+  if (validName(name, jid)) return String(name).trim();
+  if (fallbackName && validName(fallbackName, jid)) return String(fallbackName).trim();
+  return '';
+};
+
 /* ---------------- follow verification + directory enrichment ---------------- */
 /* v7.7.3 — follow-state tracking: a channel the account no longer follows
    cannot produce posts, so it is removed from the Sources list (the user asked
@@ -218,7 +278,7 @@ async function refreshDirectory() {
       CH.recordDir(d.jid, meta.name || d.name, meta.role || d.role);
       // v6.4: the REAL channel name flows into the Sources/Targets tabs too —
       // the owner sees names, never bare numbers
-      if (meta.name) CH.renameChannel(d.jid, meta.name);
+      if (validName(meta.name, d.jid)) CH.renameChannel(d.jid, meta.name);
       const isSrc = CH.listSources().some((s) => s.jid === d.jid);
       const isTgt = CH.listTargets().some((t) => t.jid === d.jid);
       const dec = unfollowDecision(notFollowed.get(d.jid), Boolean(meta.role), isSrc, Date.now() - openedAt);
@@ -243,8 +303,8 @@ async function refreshDirectory() {
     try {
       const meta = await wa.channelMeta(sock, row.jid);
       if (meta) {
-        CH.recordDir(row.jid, meta.name || row.name, meta.role || null);
-        if (meta.name) CH.renameChannel(row.jid, meta.name);
+        CH.recordDir(row.jid, validName(meta.name, row.jid) ? meta.name : cleanName(row.name, row.jid), meta.role || null);
+        if (validName(meta.name, row.jid)) CH.renameChannel(row.jid, meta.name);
       }
     } catch { /* best effort */ }
     await new Promise((r) => setTimeout(r, 1500));
@@ -337,9 +397,11 @@ function init() {
       if (!jid.endsWith('@newsletter')) return;
       if (CH.listTargets().some((t) => t.jid === jid)) return; // your own channel is the target, never a source
       if (CH.dirList().some((d) => d.jid === jid)) return;    // already known — nothing to detect
-      const name = (m.pushName && m.pushName !== jid) ? m.pushName : jid;
+      // v1.2: a post's pushName is often missing/numeric — store '' instead of
+      // the jid; resolveMissingNames() recovers the real name from WhatsApp.
+      const name = cleanName(m.pushName, jid);
       CH.recordDir(jid, name, 'VIEWER');
-      ring.info('channel.detected.follow', `Followed channel detected by its posts — "${name}" joined the follow list; auto-monitor adds it to Sources`);
+      ring.info('channel.detected.follow', `Followed channel detected by its posts — "${name || 'name pending'}" joined the follow list; auto-monitor adds it to Sources`);
       wa.events.emit('directory.changed', { fresh: [{ jid, name }] });
     } catch { /* detection is best-effort; the pipeline keeps running */ }
   });
@@ -407,16 +469,18 @@ async function browseFollow(linkOrCode, opts = {}) {
     AUD.log('owner', 'browse.follow', `Followed “${name || jid}” from the dashboard (Browse)`);
     ring.info('channel.browse.follow', `Followed “${name || jid}” from the dashboard (Browse)`);
   }
-  CH.recordDir(jid, name || (dirRow && dirRow.name) || jid, 'VIEWER');
+  CH.recordDir(jid, cleanName(name, jid, dirRow && dirRow.name), 'VIEWER');
   /* Browse = discover → monitor: a Follow here ALWAYS makes the channel a
      Source, regardless of the Auto-monitor switch (an explicit user action,
      not an automation). */
   let addedToSources = false;
   if (!CH.listTargets().some((t) => t.jid === jid) && !CH.listSources().some((s) => s.jid === jid)) {
-    const r = CH.addSource(jid, name || (dirRow && dirRow.name) || jid, 'browse-follow');
+    const r = CH.addSource(jid, cleanName(name, jid, dirRow && dirRow.name), 'browse-follow');
     if (r.ok) { addedToSources = true; subscribe(jid).catch(() => { }); }
   }
-  return { ok: true, already: !followed, code, jid, name: name || (dirRow && dirRow.name) || jid, addedToSources, inSources: CH.listSources().some((s) => s.jid === jid) };
+  // display name: the real name when known, else a masked label — never raw digits
+  const dispName = validName(name, jid) ? name : (dirRow && validName(dirRow.name, jid) ? dirRow.name : ('Channel •' + String(jid).split('@')[0].slice(-4)));
+  return { ok: true, already: !followed, code, jid, name: dispName, addedToSources, inSources: CH.listSources().some((s) => s.jid === jid) };
 }
 
 /** One-click (Sources tab): every channel this account follows on WhatsApp
@@ -427,7 +491,7 @@ function syncFollowed() {
     if (!d.role) continue;
     if (CH.listTargets().some((t) => t.jid === d.jid)) continue;
     if (CH.listSources().some((s) => s.jid === d.jid)) continue;
-    const r = CH.addSource(d.jid, d.name || d.jid, 'sync-followed');
+    const r = CH.addSource(d.jid, cleanName(d.name, d.jid), 'sync-followed');
     if (r.ok) {
       added.push(d.name || d.jid);
       subscribe(d.jid).catch(() => { });
@@ -457,6 +521,11 @@ async function browseUnfollow(ref) {
     CH.removeSource(jid);
     AUD.log('owner', 'sources.unfollow-removed', `Stopped following “${name}” from the dashboard — removed from Sources`);
   }
+  /* v1.2: flip the directory's follow role NOW. Previously it stayed "VIEWER"
+     until the 10-minute verification scan, so Browse, the "You follow N"
+     banner and every badge kept claiming the account still followed the
+     channel — the stale-state complaint, killed at the source. */
+  if (!CH.listTargets().some((t) => t.jid === jid)) CH.setDirRole(jid, '');
   AUD.log('owner', 'browse.unfollow', `Unfollowed “${name}” from the dashboard (Browse)`);
   ring.warn('channel.unfollowed', `No longer following “${name}” — removed it from Sources`);
   return { ok: true, jid, name, removedFromSources: wasSource };
@@ -470,7 +539,7 @@ async function browseAddSource(ref) {
   const dirRow = CH.dirList().find((d) => d.jid === jid);
   if (!dirRow) throw new Error('Channel not found — follow it first, then add it to Sources.');
   if (CH.listTargets().some((t) => t.jid === jid)) throw new Error('That channel is one of your TARGETS — it can’t be mirrored as its own source.');
-  const r = CH.addSource(jid, dirRow.name || jid, 'browse-add');
+  const r = CH.addSource(jid, cleanName(dirRow.name, jid), 'browse-add');
   if (!r.ok) return { ok: true, already: true, jid, name: dirRow.name || jid };
   subscribe(jid).catch(() => { });
   AUD.log('owner', 'browse.add-source', `Added “${dirRow.name || jid}” to Sources from the dashboard (Browse)`);
@@ -478,4 +547,4 @@ async function browseAddSource(ref) {
   return { ok: true, already: false, jid, name: dirRow.name || jid };
 }
 
-module.exports = { init, subscribe, autoMonitor, autoMonitorFlag, setAutoMonitor, catchUp, missedList, recoverMissed, scanChannels, scanStatus, unfollowDecision, refreshDirectory, browseFollow, browseUnfollow, browseAddSource, browseResolve, syncFollowed };
+module.exports = { init, subscribe, autoMonitor, autoMonitorFlag, setAutoMonitor, catchUp, missedList, recoverMissed, scanChannels, scanStatus, unfollowDecision, refreshDirectory, browseFollow, browseUnfollow, browseAddSource, browseResolve, syncFollowed, resolveMissingNames, validName, cleanName };

@@ -586,7 +586,7 @@ setInterval(pollStatus, 30000);
 
 /* SSE — live updates with auto-reconnect + backoff (R24) */
 (function sse() {
-  let es = null, backoff = 0, lastOpen = false;
+  let es = null, backoff = 0, lastOpen = false, lastChanSync = 0;
   const quietViews = { newpost: 1, email: 1 }; // never yank a form out from under the user
   function connect() {
     if (es || !window.EventSource) return;
@@ -598,6 +598,30 @@ setInterval(pollStatus, 30000);
         /* N1b: on (re)connect, re-sync channel lists */
         if (d.status === 'open' && !lastOpen) resyncChannels(true);
         lastOpen = d.status === 'open';
+        return;
+      }
+      if (d.type === 'channels') {
+        /* v1.2: a follow/unfollow/add/remove/rename happened — possibly from
+           another tab, the phone, or the WhatsApp-side follow-verification.
+           Refresh the name cache + every channel-dependent list so no view
+           can stay stale. Debounced so rapid actions don't pile up requests. */
+        const now = Date.now();
+        if (now - lastChanSync < 1500) return;
+        lastChanSync = now;
+        (async () => {
+          try {
+            const dir = await api('/api/directory');
+            window.__dirNames = Object.fromEntries((dir.list || []).map((c) => [c.jid, c.name]));
+          } catch (e) { /* keep the last cache */ }
+          const a = document.activeElement;
+          const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable);
+          refreshChannels('sources', {});
+          refreshChannels('targets', {});
+          const vEl = $('.view:not([hidden])');
+          const v = vEl ? vEl.dataset.view : null;
+          if (v === 'browse' && !typing) brwLoad(true);
+          else if (!typing && v && loaders[v] && !quietViews[v]) loaders[v]().catch(() => { });
+        })();
         return;
       }
       if (d.type !== 'activity') return;

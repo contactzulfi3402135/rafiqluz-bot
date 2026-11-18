@@ -63,14 +63,39 @@ function build(app) {
   const loginLimiter = rateLimit({ windowMs: 15 * 60e3, max: 12, standardHeaders: true, legacyHeaders: false,
     handler: (req, res) => res.status(429).json({ ok: false, error: 'Too many attempts — wait 15 minutes.' }) });
 
-  /* 5A: channel display name, never a raw number (same backfill order as /posts). */
-  const nameOrJid = (jid) => {
+  /* v1.2: channel display name — real name from sources → directory → synced
+     contacts, else a masked "Channel •last4" label. No API or log ever shows
+     a raw number again (v11 did the same for lists only; exports, audits,
+     rule cards and AI context inherited the raw jid). */
+  const badName = (n, j) => {
+    const x = String(n || '').trim();
+    return !x || x === j || /^\d+$/.test(x) || /^\d+(@[a-z.]+)?$/i.test(x);
+  };
+  const maskedName = (jid) => 'Channel •' + String(jid).split('@')[0].slice(-4);
+  const displayName = (jid) => {
     const sname = CH.listSources().find((x) => x.jid === jid)?.name;
-    if (sname && sname !== jid && !/^\d+$/.test(sname)) return sname;
+    if (!badName(sname, jid)) return sname;
     const dname = CH.dirList().find((x) => x.jid === jid)?.name;
-    if (dname && dname !== jid && !/^\d+$/.test(dname)) return dname;
-    try { const ct = CT.nameOf('main', jid); if (ct) return ct; } catch { }
-    return jid;
+    if (!badName(dname, jid)) return dname;
+    try { const ct = CT.nameOf('main', jid); if (!badName(ct, jid)) return ct; } catch { }
+    return maskedName(jid);
+  };
+  const nameOrJid = displayName; /* legacy alias — existing call sites keep working */
+  /* v1.2: fire-and-forget name recovery — if a list still carries numeric
+     names, ask WhatsApp for the real ones in the background; when one lands,
+     every open dashboard tab is told to refresh via SSE. */
+  let nameResolveQueued = false;
+  const maybeResolveNames = (tag) => {
+    if (nameResolveQueued || wa.getStatus().status !== 'open') return;
+    const anyBad = [...CH.listSources(), ...CH.listTargets(), ...CH.dirList()].some((r) => badName(r.name, r.jid));
+    if (!anyBad) return;
+    nameResolveQueued = true;
+    channels.resolveMissingNames(6).then(({ resolved }) => {
+      if (resolved && resolved.length) {
+        ring.info('web.names', `Recovered ${resolved.length} channel name(s) (${tag}): ${resolved.map((r) => r.name).join(', ').slice(0, 120)}`);
+        ssePush('channels', { reason: 'renamed', jids: resolved.map((r) => r.jid) }); // v1.2: no throttle — a dropped state change = stale UI
+      }
+    }).catch(() => { }).finally(() => { nameResolveQueued = false; });
   };
 
   const auth = (req, res, next) => {
@@ -248,27 +273,25 @@ function build(app) {
 
   /* ---- sources / targets / directory ---- */
   for (const [kind, add] of [['sources', (i, fast) => resolveAndAdd(i, 'sources', fast)], ['targets', (i, fast) => resolveAndAdd(i, 'targets', fast)]]) {
-    api.get(`/${kind}`, (req, res) => res.json({
-      ok: true,
-      /* v7.3.3: a channel must never show as a raw number — backfill the name
-         from the directory, then from synced contacts (channel subjects). */
-      list: (kind === 'sources' ? CH.listSources() : CH.listTargets()).map((c) => {
-        let name = String(c.name || '');
-        if (!name || name === c.jid || /^\d+$/.test(name)) {
-          const d = CH.dirList().find((x) => x.jid === c.jid);
-          if (d?.name && d.name !== c.jid) name = String(d.name);
-          else { try { const ct = require('../db').CT.nameOf('main', c.jid); if (ct) name = ct; } catch { } }
-        }
-        return { ...c, name, role: CH.dirRole(c.jid) };
-      }),
-      /* v7.9: channels this account follows on WhatsApp that are not Sources
-         yet — the Sources tab offers a one-click "add all" for exactly these. */
-      ...(kind === 'sources' ? { followedMissing: CH.dirList().filter((d) => d.role && !CH.listSources().some((s) => s.jid === d.jid) && !CH.listTargets().some((t) => t.jid === d.jid)).map((d) => ({ jid: d.jid, name: d.name || d.jid })) } : {})
-    }));
+    api.get(`/${kind}`, (req, res) => {
+      /* v1.2: if the list still carries numeric names, recover the real ones
+         from WhatsApp in the background (SSE notifies the tabs on success). */
+      if (kind === 'sources') maybeResolveNames('sources list');
+      /* v7.3.3: a channel must never show as a raw number — displayName()
+         resolves sources → directory → contacts → masked "Channel •last4". */
+      res.json({
+        ok: true,
+        list: (kind === 'sources' ? CH.listSources() : CH.listTargets()).map((c) => ({ ...c, name: displayName(c.jid), role: CH.dirRole(c.jid) })),
+        /* v7.9: channels this account follows on WhatsApp that are not Sources
+           yet — the Sources tab offers a one-click "add all" for exactly these. */
+        ...(kind === 'sources' ? { followedMissing: CH.dirList().filter((d) => d.role && !CH.listSources().some((s) => s.jid === d.jid) && !CH.listTargets().some((t) => t.jid === d.jid)).map((d) => ({ jid: d.jid, name: displayName(d.jid) })) } : {})
+      });
+    });
     if (kind === 'sources') {
       api.post('/sources/sync-followed', (req, res) => {
         try {
           const added = channels.syncFollowed();
+          ssePush('channels', { reason: 'sync-followed', count: added.length }); // v1.2: no throttle — a dropped state change = stale UI
           res.json({ ok: true, added, count: added.length });
         } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
       });
@@ -277,7 +300,7 @@ function build(app) {
       try {
         const r = await add(String(req.body?.input || '').trim());
         if (!r.ok) return res.status(400).json({ ok: false, error: r.message });
-        AUD.log('owner', `${kind}.add`, `Added ${kind.slice(0, -1)}: ${nameOrJid(String(req.body?.input || '').trim()).slice(0, 80)}`);
+        AUD.log('owner', `${kind}.add`, `Added ${kind.slice(0, -1)}: ${(kind === 'sources' ? CH.listSources() : CH.listTargets()).map((x) => displayName(x.jid)).slice(-1)[0] || String(req.body?.input || '').slice(0, 80)}`);
         res.json({ ok: true, message: r.message });
       } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
     });
@@ -308,10 +331,21 @@ function build(app) {
       const jid = decodeURIComponent(req.params.jid);
       AUD.log('owner', `${kind}.remove`, `Removed ${kind.slice(0, -1)}: ${nameOrJid(jid).slice(0, 80)}`);
       (kind === 'sources' ? CH.removeSource : CH.removeTarget)(jid);
+      ssePush('channels', { reason: 'removed', jid, kind }); // v1.2: no throttle — a dropped state change = stale UI
       res.json({ ok: true });
     });
   }
-  api.get('/directory', (req, res) => res.json({ ok: true, list: CH.dirList(), wa: wa.getStatus(), scan: channels.scanStatus() }));
+  api.get('/directory', (req, res) => {
+    maybeResolveNames('directory');
+    res.json({ ok: true, list: CH.dirList().map((d) => ({ ...d, name: displayName(d.jid) })), wa: wa.getStatus(), scan: channels.scanStatus() });
+  });
+  /* v1.2: owner-triggered name recovery — "my channels show numbers, fix it" */
+  api.post('/channels/resolve-names', async (req, res) => {
+    try {
+      const r = await channels.resolveMissingNames(10);
+      res.json({ ok: true, ...r });
+    } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
+  });
 
   /* v7.8.0 · Browse channels — a real browse experience in the dashboard:
      curated catalog (categories + countries + endless paging), real Follow
@@ -368,6 +402,7 @@ function build(app) {
     try {
       const b = req.body || {};
       const r = await channels.browseFollow(b.link || b.code || '', { addSource: !!b.addSource });
+      if (r && r.ok) ssePush('channels', { reason: 'follow', jid: r.jid }); // v1.2: no throttle — a dropped state change = stale UI
       res.json(r);
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
@@ -375,6 +410,7 @@ function build(app) {
     try {
       const b = req.body || {};
       const r = await channels.browseUnfollow(b.code || b.jid || '');
+      if (r && r.ok) ssePush('channels', { reason: 'unfollow', jid: r.jid }); // v1.2: no throttle — a dropped state change = stale UI
       res.json(r);
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
@@ -382,6 +418,7 @@ function build(app) {
     try {
       const b = req.body || {};
       const r = await channels.browseAddSource(b.code || b.jid || '');
+      if (r && r.ok) ssePush('channels', { reason: 'addsource', jid: r.jid }); // v1.2: no throttle — a dropped state change = stale UI
       res.json(r);
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
@@ -393,6 +430,7 @@ function build(app) {
       if (!sock || wa.getStatus().status !== 'open') return res.status(400).json({ ok: false, error: 'WhatsApp is not connected — link it in the WhatsApp tab first, then refresh.' });
       const stat = await channels.scanChannels();
       AUD.log('owner', 'sources.rescan', `Manual channel check: ${stat.checked} channel(s) verified, ${stat.removed.length} removed (unfollowed)`);
+      ssePush('channels', { reason: 'rescan', removed: stat.removed }); // v1.2: no throttle — a dropped state change = stale UI
       res.json({ ok: true, ...stat });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });

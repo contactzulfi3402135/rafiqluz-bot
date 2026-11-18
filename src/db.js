@@ -472,8 +472,11 @@ const CH = {
   lastSourceActivity: () => { try { const r = open().prepare('SELECT MAX(last_post_at) t FROM sources').get(); return String(r?.t || ''); } catch { return ''; } },
   listTargets: () => open().prepare('SELECT * FROM targets ORDER BY name COLLATE NOCASE').all(),
   listActiveTargets: () => open().prepare('SELECT * FROM targets WHERE paused=0 ORDER BY name COLLATE NOCASE').all(),
-  addSource: (jid, name, by) => { try { open().prepare('INSERT INTO sources(jid,name,added_by) VALUES(?,?,?)').run(jid, name || jid, by || ''); return { ok: true }; } catch { return { ok: false, existed: true }; } },
-  addTarget: (jid, name, by) => { try { open().prepare('INSERT INTO targets(jid,name,added_by) VALUES(?,?,?)').run(jid, name || jid, by || ''); return { ok: true }; } catch { return { ok: false, existed: true }; } },
+  /* v1.2: a missing name is stored as '' — never the jid. A jid stored as the
+     name is what made channels show up as "1203631001…" everywhere; '' lets
+     the name resolvers (directory → contacts → WhatsApp metadata) fill it in. */
+  addSource: (jid, name, by) => { try { open().prepare('INSERT INTO sources(jid,name,added_by) VALUES(?,?,?)').run(jid, String(name || '').trim() || '', by || ''); return { ok: true }; } catch { return { ok: false, existed: true }; } },
+  addTarget: (jid, name, by) => { try { open().prepare('INSERT INTO targets(jid,name,added_by) VALUES(?,?,?)').run(jid, String(name || '').trim() || '', by || ''); return { ok: true }; } catch { return { ok: false, existed: true }; } },
   pauseSource: (jid, p) => open().prepare('UPDATE sources SET paused=? WHERE jid=?').run(p ? 1 : 0, jid),
   pauseTarget: (jid, p) => open().prepare('UPDATE targets SET paused=? WHERE jid=?').run(p ? 1 : 0, jid),
   removeSource: (jid) => open().prepare('DELETE FROM sources WHERE jid=?').run(jid),
@@ -481,6 +484,9 @@ const CH = {
   recordDir: (jid, name, role) => { try { open().prepare("INSERT INTO directory(jid,name,role) VALUES(?,?,?) ON CONFLICT(jid) DO UPDATE SET name=excluded.name, role=COALESCE(excluded.role, role), seen_at=datetime('now')").run(jid, name || '', role || null); } catch { } },
   forgetDir: (jid) => { try { open().prepare('DELETE FROM directory WHERE jid=?').run(jid); } catch { } },
   dirRole: (jid) => { try { const r = open().prepare('SELECT role FROM directory WHERE jid=?').get(jid); return r ? (r.role || '') : ''; } catch { return ''; } },
+  /* v1.2: explicit role setter — clearDirRole-style unfollow must not wait for
+     the 10-minute verification scan to flip Browse/badges back to "not following" */
+  setDirRole: (jid, role) => { try { open().prepare("UPDATE directory SET role=?, seen_at=datetime('now') WHERE jid=?").run(String(role || ''), jid); } catch { } },
   renameChannel: (jid, name) => { if (!name) return; try { open().prepare('UPDATE sources SET name=? WHERE jid=?').run(name, jid); open().prepare('UPDATE targets SET name=? WHERE jid=?').run(name, jid); } catch { } },
   dirList: () => open().prepare('SELECT * FROM directory ORDER BY name COLLATE NOCASE').all(),
   setSourceTargets: (jid, csv) => open().prepare('UPDATE sources SET targets=? WHERE jid=?').run(String(csv || '').replace(/[^0-9a-z@.,_-]/gi, '').slice(0, 2000), jid),
