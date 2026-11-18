@@ -40,6 +40,8 @@ const chanName = (c) => {
 /* v7.10: every channel-name display goes through chanName — a stored name that
    is a bare number/jid is shown as "Channel •last4", never as raw digits. */
 const chanLbl = (name, jid) => chanName({ name: String(name || '').trim(), jid: String(jid || '') });
+/* v1.1.3: display a label for a known jid alone — never raw digits (v600 rule) */
+const dirNameLbl = (jid) => chanName({ name: String((window.__dirNames && window.__dirNames[jid]) || '').trim(), jid: String(jid || '') });
 const shortJid = (j) => esc(String(j || '').replace('@newsletter', ''));
 const fmtNum = (n) => {
   n = Number(n) || 0;
@@ -654,6 +656,12 @@ $('#srcRefresh').addEventListener('click', async () => {
   /* v7.10: full re-render — table, count, subscribers AND the "you follow
      N channels" banner (a fresh follow/unfollow changes both). */
   await loaders.sources().catch(() => { });
+  /* v1.1.3: re-pull the directory so the name cache behind chanLbl() is as
+     fresh as WhatsApp just made it (rename/unfollow propagate to every view). */
+  try {
+    const d = await api('/api/directory');
+    window.__dirNames = Object.fromEntries((d.list || []).map((c) => [c.jid, c.name]));
+  } catch (e) { /* best effort */ }
 });
 $('#tgtRefresh').addEventListener('click', () => { toast('Re-syncing targets…'); refreshChannels('targets', { announce: true }); });
 
@@ -681,7 +689,7 @@ function brwRow(c) {
   return `<div class="brw-row" data-code="${esc(c.id)}" data-name="${esc(c.name)}">
     <div class="brw-av">${av}</div>
     <div class="brw-info">
-      <div class="ch-row-name">${esc(c.name)}${badges}</div>
+      <div class="ch-row-name">${esc(chanLbl(c.name, c.jid || c.id))}${badges}</div>
       <div class="ch-sub">${c.blurb ? esc(c.blurb) + ' · ' : ''}<b>${esc(c.country)}</b></div>
     </div>
     <div class="ra">${actions}</div>
@@ -727,6 +735,10 @@ async function brwLoad(reset) {
   } finally { brw.loading = false; }
 }
 loaders.browse = async () => {
+  /* v1.1.3: every visit re-syncs — a follow/unfollow anywhere (phone, Browse,
+     Sources Refresh) must be reflected here: badges, "You follow N" and the
+     list itself. The catalog is local, so this costs nothing. */
+  if (brw.booted) await brwLoad(true).catch(() => { });
   if (!brw.booted) {
     brw.booted = true;
     try {
@@ -747,14 +759,19 @@ loaders.browse = async () => {
       let t = null;
       const si = $('#brwSearch');
       si && si.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => { brw.q = String(si.value || '').trim(); brwLoad(true); }, 300); });
-      /* endless scroll — the content pane is the scroller */
+      /* endless scroll — v1.1.3: on desktop the list scrolls INSIDE its card,
+         on phone the content pane scrolls; follow whichever one is the scroller */
       const content = $('#content');
-      content && content.addEventListener('scroll', () => {
-        if (!content || content.classList.contains('side-open')) return;
+      const brwNearBottom = () => {
         const inBrowse = !document.querySelector('.view[data-view="browse"]').hidden;
         if (!inBrowse || brw.loading || brw.end) return;
-        if (content.scrollHeight - content.scrollTop - content.clientHeight < 420) brwLoad(false);
-      });
+        const list = $('#brwList');
+        const sc = (list && list.scrollHeight > list.clientHeight + 8) ? list : content;
+        if (!sc) return;
+        if (sc.scrollHeight - sc.scrollTop - sc.clientHeight < 420) brwLoad(false);
+      };
+      content && content.addEventListener('scroll', () => { if (!content || content.classList.contains('side-open')) return; brwNearBottom(); });
+      $('#brwList') && $('#brwList').addEventListener('scroll', brwNearBottom);
       $('#brwRefresh') && $('#brwRefresh').addEventListener('click', () => brwLoad(true));
       /* follow / unfollow / add-to-sources — in-place (N1) */
       $('#brwList').addEventListener('click', async (ev) => {
@@ -972,7 +989,7 @@ function mountPicker(mount, opts) {
   function paintChips() {
     const names = Object.fromEntries(rows.map((c) => [c.jid, chanName(c)]));
     const ids = selAll();
-    chips.innerHTML = ids.map((j) => `<span class="chip">${esc(names[j] || shortJid(j))}<button class="chip-x" data-x="${esc(j)}" aria-label="Remove ${esc(names[j] || '')}">${_x()}</button></span>`).join('');
+    chips.innerHTML = ids.map((j) => `<span class="chip">${esc(names[j] || dirNameLbl(j))}<button class="chip-x" data-x="${esc(j)}" aria-label="Remove ${esc(names[j] || '')}">${_x()}</button></span>`).join('');
     $$('.chip-x', chips).forEach((b) => b.addEventListener('click', () => {
       const row = $(`.cp-row[data-jid="${CSS.escape(b.dataset.x)}"] input`, list);
       if (row) row.checked = false;
@@ -1241,7 +1258,8 @@ loaders.home = async () => {
   /* activity timeline */
   const [iInfo, iWarn, iErr] = await Promise.all([ico('info'), ico('alert'), ico('x')]);
   const icoMap = { info: iInfo, warn: iWarn, error: iErr };
-  $('#activityFeed').innerHTML = (logs.list || []).map((l) =>
+  /* v1.1.3: capped at 6 — the home must fit one page; "Full history ↗" is one click away */
+  $('#activityFeed').innerHTML = (logs.list || []).slice(0, 6).map((l) =>
     `<div class="tl-i"><span class="tl-ic" data-lv="${esc(l.level)}">${icoMap[l.level] || ''}</span><span class="tl-b"><b>${esc(l.code)}</b> — ${esc(l.msg)}</span><span class="tl-t">${when(l.ts)}</span></div>`).join('')
     || `<div class="tl-i"><span class="tl-b muted">No activity yet.</span></div>`;
   /* Signal Desk reference panels — queue / health / pacing + 24 h activity chart */
@@ -2688,7 +2706,7 @@ function openQuickMenu(p, btn) {
   if (String(p.body || '').trim() && p.status !== 'queued' && p.status !== 'pending') push('reuse', 'Reuse in Composer', 'Open this text in the Composer');
   if (p.status === 'published' || p.status === 'edited') {
     const targets = [...new Set((p.keys || []).map((k) => k.target_jid))].slice(0, 4);
-    for (const t of targets) push('undo-row', 'Undo on ' + (chanName({ jid: t, name: '' }) || shortJid(t)), 'Delete this post from that channel (only allowed while it is the latest there)', true, t);
+    for (const t of targets) push('undo-row', 'Undo on ' + (dirNameLbl(t)), 'Delete this post from that channel (only allowed while it is the latest there)', true, t);
     if (targets.length > 4) items.push(`<div class="muted tiny" style="padding:4px 9px">+${targets.length - 4} more targets — use the global Undo card</div>`);
   }
   if (String(p.body || '').trim()) push('card', 'Make announcement card', 'Render a branded 1080×1080 PNG card from this post (Settings · Power: Announcement cards)');
@@ -2867,7 +2885,7 @@ loaders.analytics = async () => {
   $('#anHeat').innerHTML = (d.heatmap || []).length ? heatSvg(d.heatmap) : '<span class="muted tiny">No posts in the last 7 days yet.</span>';
   /* 5D: per-target table */
   $('#anTargets tbody').innerHTML = (d.perTarget || []).map((s) =>
-    `<tr><td>${esc((window.__dirNames && window.__dirNames[s.target_jid]) || shortJid(s.target_jid))}</td><td class="num"><b>${s.pub || 0}</b></td><td class="num">${s.edited || 0}</td><td class="num">${s.failed || 0}</td></tr>`).join('')
+    `<tr><td>${esc(dirNameLbl(s.target_jid))}</td><td class="num"><b>${s.pub || 0}</b></td><td class="num">${s.edited || 0}</td><td class="num">${s.failed || 0}</td></tr>`).join('')
     || '<tr><td colspan="4" class="muted">Nothing landed in this range.</td></tr>';
   /* 5D: media vs text + skip reasons */
   const m = d.media || { withMedia: 0, text: 0 };
@@ -2880,7 +2898,7 @@ loaders.analytics = async () => {
     ? rEntries.map(([r, n]) => `<div class="reason-row" title="${esc(r)}: ${n}"><span class="reason-name">${esc(r)}</span><span class="reason-bar"><span style="width:${Math.round((n / rMax) * 100)}%"></span></span><span class="num tiny">${n}</span></div>`).join('')
     : '<span class="muted tiny">Nothing was skipped in this range.</span>';
   /* 5D: leaderboard (sourcesFull + per-source 7-day spark + goal hit-rate) */
-  const board = (d.sourcesFull || []).map((s) => ({ ...s, name: (window.__dirNames && window.__dirNames[s.source_jid]) || shortJid(s.source_jid) }));
+  const board = (d.sourcesFull || []).map((s) => ({ ...s, name: (window.__dirNames && window.__dirNames[s.source_jid]) || s.name || '' }));
   const totPub = board.reduce((a, b) => a + (b.pub || 0), 0) || 1;
   const heat7 = (d.heatmap || []).map((c) => c.day); // last 7 PKT days, old → new
   const sparkFor = (jid) => heat7.map((day) => ((d.dayBySource || {})[jid] || {})[day] || 0);
@@ -2892,7 +2910,7 @@ loaders.analytics = async () => {
     const goalCell = g ? `${g.today}/${g.daily_n} today` : '<span class="muted">—</span>';
     return `<tr>
       <td class="num muted">${i + 1}</td>
-      <td><b>${esc(s.name)}</b></td>
+      <td><b>${esc(chanLbl(s.name, s.source_jid))}</b></td>
       <td class="num"><b>${s.pub || 0}</b></td>
       <td class="share-cell"><span class="share-bar"><span style="width:${Math.round(((s.pub || 0) / totPub) * 100)}%"></span></span><span class="tiny muted">${Math.round(((s.pub || 0) / totPub) * 100)}%</span></td>
       <td class="num">${s.media || 0}</td>
@@ -2916,7 +2934,7 @@ loaders.analytics = async () => {
       <td><button class="btn btn-sm btn-g g-del" title="Remove goal">Remove</button></td></tr>`;
   });
   const suggest = (allSources.list || []).filter((s) => !goalMap[s.jid]).slice(0, 3);
-  if (suggest.length) goalRows.push(`<tr class="muted"><td colspan="3">Suggested: ${suggest.map((s) => esc(s.name)).join(', ')}</td><td></td></tr>`);
+  if (suggest.length) goalRows.push(`<tr class="muted"><td colspan="3">Suggested: ${suggest.map((s) => esc(chanLbl(s.name, s.jid))).join(', ')}</td><td></td></tr>`);
   $('#anGoals tbody').innerHTML = goalRows.join('') || '<tr><td colspan="4" class="muted">No per-source goals yet — set one from the list above or add sources first.</td></tr>';
   $$('#anGoals .g-n').forEach((inp) => inp.addEventListener('change', async () => {
     try { await api('/api/goals', { method: 'POST', body: { jid: inp.closest('tr').dataset.gjid, n: inp.value } }); loaders.analytics(); } catch (e) { toast(e.message, 'err'); }
@@ -4262,35 +4280,64 @@ $('#aiChatClear').addEventListener('click', async () => {
   const KEY = 'rc-cards';
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+  /* v1.1.3: secondary long sections start COLLAPSED so each view fits one
+     page (owner brief: "everything fits in one page"). Fresh-state only — a
+     saved choice in rc-cards always wins. Headers stay visible (accordion
+     semantics), so nothing is lost, just tucked away. */
+  const DEFAULT_CLOSED = new Set(['browse.1', 'email.3', 'email.4', 'about.1', 'about.3', 'analytics.2', 'analytics.3', 'media.3', 'media.5', 'branding.2', 'branding.3', 'branding.4', 'bulk.3', 'sources.3', 'routing.1', 'routing.4', 'guardrails.2', 'guardrails.4', 'digest.3', 'digest.4', 'newpost.1', 'newpost.3', 'scheduled.schedListMode.3', 'approvals.queueTabApprovals.1']);
+  /* v1.1.3b: on short desktops (≤800px tall) the analytics secondary sections
+     fold by default — the view must fit one 704px-tall page. Fresh-state only. */
+  if (window.innerHeight <= 800) {
+    DEFAULT_CLOSED.add('analytics.anGoalsDuo.1');
+    DEFAULT_CLOSED.add('analytics.1');
+    DEFAULT_CLOSED.add('routing.5');
+  }
+  function wire(card, id) {
+    const header = card.querySelector(':scope > .card-h');
+    if (!header) return;
+    let body = card.querySelector(':scope > .card-b');
+    if (!body) {
+      body = document.createElement('div');
+      body.className = 'card-b';
+      let node = header.nextSibling;
+      while (node) { const nx = node.nextSibling; body.appendChild(node); node = nx; }
+      card.appendChild(body);
+    } else {
+      /* v1.1.3: some cards have markup content AFTER an existing .card-b —
+         fold it in too, or the collapsed state would leave it visible */
+      let node = body.nextSibling;
+      while (node) { const nx = node.nextSibling; body.appendChild(node); node = nx; }
+    }
+    card.classList.add('collapsible');
+    const chev = document.createElement('span');
+    chev.className = 'chev';
+    chev.innerHTML = '<svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+    header.appendChild(chev);
+    const open = saved[id] != null ? saved[id] : !DEFAULT_CLOSED.has(id);
+    if (!open) card.classList.add('collapsed');
+    header.addEventListener('click', (ev) => {
+      if (ev.target.closest('button, input, select, a, label')) return;
+      const nowOpen = !card.classList.contains('collapsed');
+      card.classList.toggle('collapsed', nowOpen);
+      saved[id] = !nowOpen;
+      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    });
+  }
   $$('.view').forEach((view) => {
     const vname = view.dataset.view;
     let idx = 0;
     view.querySelectorAll(':scope > .card').forEach((card) => {
-      const header = card.querySelector(':scope > .card-h');
-      if (!header) return;
+      if (!card.querySelector(':scope > .card-h')) return;
       idx += 1;
-      const id = vname + '.' + idx;
-      if (!card.querySelector(':scope > .card-b')) {
-        const body = document.createElement('div');
-        body.className = 'card-b';
-        let node = header.nextSibling;
-        while (node) { const nx = node.nextSibling; body.appendChild(node); node = nx; }
-        card.appendChild(body);
-      }
-      card.classList.add('collapsible');
-      const chev = document.createElement('span');
-      chev.className = 'chev';
-      chev.innerHTML = '<svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-      header.appendChild(chev);
-      const open = saved[id] != null ? saved[id] : true; // all open by default (data-dense)
-      if (!open) card.classList.add('collapsed');
-      header.addEventListener('click', (ev) => {
-        if (ev.target.closest('button, input, select, a, label')) return;
-        const nowOpen = !card.classList.contains('collapsed');
-        card.classList.toggle('collapsed', nowOpen);
-        saved[id] = !nowOpen;
-        try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
-      });
+      wire(card, vname + '.' + idx);
+    });
+    /* v1.1.3: cards nested one level deep (Scheduled list mode, Approvals
+       tabs) get accordion behaviour too — their ids carry the wrapper id. */
+    view.querySelectorAll(':scope > [id] > .card').forEach((card) => {
+      const wrap = card.parentElement;
+      if (!wrap || !wrap.id) return;
+      const idx2 = [...wrap.children].filter((c) => c.classList.contains('card')).indexOf(card) + 1;
+      wire(card, vname + '.' + wrap.id + '.' + idx2);
     });
   });
 })();
@@ -4576,7 +4623,7 @@ async function waContactDetails(jid) {
   try {
     const d = await api('/api/contacts/' + jidUrl(jid) + '?' + sessQ());
     openModal({
-      title: d.name || shortJid(jid), icon: ico('users'), primary: null,
+      title: d.name ? chanLbl(d.name, jid) : dirNameLbl(jid), icon: ico('users'), primary: null,
       html: `<div class="field"><label>Your note <span class="muted tiny">— private to you, saved to this contact</span></label><textarea class="in" id="cnote" rows="3" placeholder="e.g. Franchisee — follow up Friday">${esc(d.note || '')}</textarea></div>
         <div class="row-actions" style="margin-top:8px"><button class="btn btn-p" id="cnoteSave">Save note</button>${d.noteUpdatedAt ? `<span class="muted tiny" style="align-self:center">updated ${esc(when(d.noteUpdatedAt))}</span>` : ''}</div>
         <h3 style="margin-top:16px;font-size:var(--t14);font-weight:600">Tags</h3>
@@ -4627,7 +4674,7 @@ async function loadGuardTargets() {
     const d = await api('/api/guardrates');
     if (!(d.targets || []).length) { tb.innerHTML = '<tr><td colspan="3" class="muted tiny" style="padding:12px">No target channels saved yet — add them in Channel Targets, then cap them here.</td></tr>'; return; }
     tb.innerHTML = d.targets.map((t) => `
-      <tr><td><b>${esc(t.name)}</b><div class="muted tiny">${esc(t.jid)}</div></td>
+      <tr><td><b>${esc(chanLbl(t.name, t.jid))}</b><div class="muted tiny">${esc(t.jid)}</div></td>
       <td class="num"><span class="muted tiny">${t.lastHour} sent in the last hour</span></td>
       <td class="num"><input class="in" type="number" min="0" max="500" data-gtr="${esc(t.jid)}" value="${t.max}" style="width:88px" title="0 = follow the global guard above"></td></tr>`).join('');
   } catch (e) { toast(e.message, 'err'); }
@@ -5000,7 +5047,7 @@ async function loadMediaLib() {
     const thumb = isImg
       ? `<img loading="lazy" src="/api/media-lib/download?ref=${encodeURIComponent(m.ref)}" alt="${esc(m.name || 'image')}" onerror="this.parentElement.innerHTML='<span class=\\'icon\\'>🖼</span>'">`
       : (m.kind === 'video' ? '🎬' : m.kind === 'audio' ? '🎵' : '📄');
-    const from = m.src === 'chat' ? (chanName({ jid: m.jid, name: '' }) || shortJid(m.jid)) : 'Queued post media';
+    const from = m.src === 'chat' ? (chanName({ jid: m.jid, name: '' }) || dirNameLbl(m.jid)) : 'Queued post media';
     return `<div class="ml-tile" data-ref="${esc(m.ref)}">
       <div class="ml-thumb">${thumb}</div>
       <div class="ml-meta"><div class="ml-name" title="${esc(m.name || m.ref)}">${esc(m.name || 'file')}</div><div class="ml-sub" title="${esc(from)}">${esc(from)} · ${(m.bytes / 1048576).toFixed(1)} MB</div></div>

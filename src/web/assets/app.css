@@ -251,7 +251,10 @@ img { max-width: 100%; }
 }
 
 /* ── 3 · APP SHELL (spec §6) ───────────────────────────────────── */
-.app { display: flex; height: 100dvh; overflow: hidden; }
+/* v1.1.3: 100vh fallback + 100svh — the shell must never render below the
+   visible viewport (dynamic toolbars: dvh = LARGEST viewport used to push the
+   bottom tab bar + last content rows off-screen on phones). */
+.app { display: flex; height: 100vh; height: 100svh; overflow: hidden; }
 
 /* sidebar — surface-1, 260px, 1px end border, own scroll */
 .sidebar {
@@ -416,7 +419,11 @@ img { max-width: 100%; }
 .sb-scrim { display: none; }
 
 /* ── main / topbar ─────────────────────────────────────────────── */
-.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+/* v1.1.3: min-height:0 is THE phone scroll fix — on phones .app becomes a
+   COLUMN flex, and .main's automatic minimum size (overflow is visible) let it
+   grow to full content height (4000px+), clipping everything below the screen
+   with no way to scroll. Desktop (row flex) was unaffected. */
 .topbar {
   flex: none; height: var(--tb-h);
   background: var(--surface-1);
@@ -1418,7 +1425,7 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .app { flex-direction: column; }
   .sidebar {
     position: fixed; inset: 0 auto 0 0; z-index: 96;
-    width: min(300px, 86vw); height: 100dvh;
+    width: min(300px, 86vw); height: 100vh; height: 100svh;
     transform: translateX(-100%);
     transition: transform var(--dur-s) var(--ease);
     padding: 16px 12px 12px;
@@ -2055,7 +2062,7 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   display: flex; flex-direction: column; overflow: hidden;
   animation: pop var(--dur-m) var(--ease);
 }
-.rpanel.exp { bottom: 16px; inset-inline-end: 16px; width: min(680px, calc(100vw - 32px)); height: min(720px, calc(100dvh - 32px)); }
+.rpanel.exp { bottom: 16px; inset-inline-end: 16px; width: min(680px, calc(100vw - 32px)); height: min(720px, calc(100vh - 32px)); height: min(720px, calc(100svh - 32px)); }
 .rhead { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-1); cursor: grab; background: var(--surface-2); }
 .rhead:active { cursor: grabbing; }
 .rtitle { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-1); }
@@ -2319,7 +2326,7 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .view:has(.ww) { padding: 0; }
   .ww {
     border: 0; border-radius: 0;
-    min-height: calc(100dvh - var(--tb-h) - 64px);
+    min-height: calc(100vh - var(--tb-h) - 64px); min-height: calc(100svh - var(--tb-h) - 64px);
   }
   .ww-side { width: 100%; max-width: 100%; }
   /* chat toggle: full-width list → full-width conversation with back button */
@@ -2417,4 +2424,452 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 @media (max-width: 480px) {
   .login-body { padding: 14px; align-items: start; padding-top: 12vh; }
   .login-card { padding: 26px 20px 22px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   v1.1.3 — ONE-PAGE DENSITY (owner brief: "everything fits in one page,
+   no scroll, even the tab columns; reorganize whatever needs it")
+   Strategy:
+   1. ACCORDION FIX — the legacy .collapsed rule hid the ENTIRE card with no
+      way to reopen it. Now: collapsed = body hidden, header stays (click
+      re-opens). This is what makes default-collapsed sections safe.
+   2. DENSITY ≥1024px — tighter paddings, headings, rows, KPIs (all views).
+   3. INTERNAL-SCROLL PANELS ≥768px — primary lists (sources, browse,
+      approvals, scheduled, posts, logs, journal, media, email, bulk,
+      targets) scroll inside their card with a sticky header, so the view
+      itself stays one page while the full list remains reachable.
+   4. WIDE SCREENS ≥1440px — 6-up KPIs, 2-column settings groups, 4-up brand
+      grid.
+   5. SIDEBAR ("tab column") density ≥1024px — 40px→36px items + tighter
+      category heads so all 5 categories + 20 items fit a 1080p viewport
+      (was 55px over).
+   Fresh-install state only: the user's own collapse choices (localStorage
+   rc-cards) always win over the defaults.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* 1 · accordion semantics (all widths) */
+.card.collapsible.collapsed { display: block; }
+.card.collapsible.collapsed > .card-b { display: none; }
+.card.collapsible.collapsed > .card-h { margin-bottom: 0; cursor: pointer; }
+.card.collapsible > .card-h .chev { transition: transform var(--dur) var(--ease); }
+.card.collapsible.collapsed > .card-h .chev { transform: rotate(-90deg); }
+
+/* 2 · density — desktop + tablet (all widths ≥768) */
+@media (min-width: 768px) {
+  .view { padding: 18px 20px 20px; gap: 14px; }
+  .card { padding: 14px 16px; }
+  .card-h { font-size: 14.5px; line-height: 22px; margin-bottom: 10px; }
+  .page-heading h1 { font-size: 24px; line-height: 32px; }
+  .ph h2 { font-size: 20px; line-height: 28px; }
+  .ph-d { font-size: 12.5px; }
+  .eyebrow { margin-bottom: 4px; }
+  .kpi { min-height: 84px; padding: 12px 14px; gap: 2px; }
+  .k-v { font-size: 24px; line-height: 32px; }
+  .t td { padding: 9px 12px; }
+  .t th { padding: 8px 12px; }
+  .sw-card { padding: 10px 14px; gap: 12px; }
+  .set-body { gap: 12px; }
+  .set-group.on { gap: 12px; }
+  .set-wrap { gap: 14px; }
+  .set-tab { height: 34px; }
+  .home-grid { gap: 14px; }
+  .home-col { gap: 14px; }
+  .home-chart-svg { height: 148px; }
+  .tl { gap: 0; }
+  .rosw { height: 30px; }
+  /* data-safe: health tables (boot log / self-test history) and the activity
+     feed grow with usage — cap them so the view stays one page */
+  #healthParts { max-height: 200px; overflow-y: auto; scrollbar-width: thin; }
+  .view[data-view="health"] .tw { max-height: 200px; overflow-y: auto; }
+  #activityFeed { max-height: 220px; overflow-y: auto; scrollbar-width: thin; }
+
+  /* sidebar — all 5 categories + 20 items on one screen (1080p) */
+  .sidebar { padding: 12px 10px 10px; }
+  .sb-head { height: 48px; }
+  .sb-item { height: 36px; font-size: 13.5px; gap: 10px; padding: 0 10px; }
+  .sb-group { height: 24px; margin-top: 6px; }
+  .side-health { padding: 4px 10px; }
+}
+
+/* 3 · internal-scroll panels — the list scrolls in-card, the page doesn't.
+   C per view = (chrome above the table) + card-h + card padding, so the cap
+   lands the view exactly at 100vh client height on a 1080p desktop; the
+   max(240px, …) floor keeps small laptop screens usable. */
+@media (min-width: 768px) {
+  .view[data-view="posts"] .tw, .view[data-view="media"] .tw,
+  .view[data-view="bulk"] .tw, .view[data-view="approvals"] .tw {
+    max-height: max(240px, calc(100vh - 224px)); max-height: max(240px, calc(100svh - 224px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="audit"] .tw {
+    max-height: max(240px, calc(100vh - 376px)); max-height: max(240px, calc(100svh - 376px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="journal"] .tw {
+    max-height: max(240px, calc(100vh - 338px)); max-height: max(240px, calc(100svh - 338px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="email"] .tw {
+    max-height: max(200px, calc(100vh - 684px)); max-height: max(200px, calc(100svh - 684px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="targets"] .tw {
+    max-height: max(240px, calc(100vh - 598px)); max-height: max(240px, calc(100svh - 598px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="sources"] .tw {
+    max-height: max(240px, calc(100vh - 644px)); max-height: max(240px, calc(100svh - 644px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="scheduled"] .tw {
+    max-height: max(240px, calc(100vh - 704px)); max-height: max(240px, calc(100svh - 704px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  /* sticky headers stay pinned while the body scrolls */
+  .view[data-view="sources"] .t th, .view[data-view="targets"] .t th,
+  .view[data-view="approvals"] .t th, .view[data-view="scheduled"] .t th,
+  .view[data-view="posts"] .t th, .view[data-view="logs"] .t th,
+  .view[data-view="journal"] .t th, .view[data-view="media"] .t th,
+  .view[data-view="email"] .t th, .view[data-view="bulk"] .t th,
+  .view[data-view="audit"] .t th {
+    position: sticky; top: 0; z-index: 2;
+  }
+  /* non-table lists scroll inside their card too */
+  .view[data-view="browse"] #brwList {
+    max-height: max(240px, calc(100vh - 566px)); max-height: max(240px, calc(100svh - 566px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="logs"] .card-b {
+    max-height: max(240px, calc(100vh - 308px)); max-height: max(240px, calc(100svh - 308px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="approvals"] #queueList {
+    max-height: max(200px, calc(100vh - 444px)); max-height: max(200px, calc(100svh - 444px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  #schedListMode .cal-grid {
+    max-height: max(200px, calc(100vh - 844px)); max-height: max(200px, calc(100svh - 844px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="branding"] #swBrand {
+    max-height: max(160px, calc(100vh - 764px)); max-height: max(160px, calc(100svh - 764px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace {
+    max-height: max(90px, calc(100vh - 930px)); max-height: max(90px, calc(100svh - 930px));
+    overflow-y: auto; scrollbar-width: thin;
+  }
+  /* the WhatsApp mirror IS the page — remove the view padding around it */
+  .view[data-view="whatsapp"] { padding: 0; gap: 0; }
+}
+
+/* 4 · wide screens — room to flatten */
+@media (min-width: 1440px) {
+  .kpi-grid, .kpis.kpi-grid { grid-template-columns: repeat(6, 1fr); }
+  .set-group.on:not(.cols-2) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .brand-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* 6b · home — compress the overview so the whole desk fits */
+@media (min-width: 768px) {
+  .view[data-view="home"] { padding: 14px 20px 14px; gap: 10px; }
+  .view[data-view="home"] .page-heading { gap: 8px; }
+  .view[data-view="home"] .page-heading h1 { font-size: 22px; line-height: 30px; }
+  .view[data-view="home"] .page-heading p { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view[data-view="home"] .kpi { padding: 10px 12px; }
+  .view[data-view="home"] .k-v { font-size: 26px; line-height: 34px; }
+  .view[data-view="home"] .pb-t span { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .pausebar { padding: 10px 14px; gap: 12px; }
+  .pausebar .pb-t b { font-size: 14px; }
+  .kpi { min-height: 76px; }
+  .home-chart-svg { height: max(84px, calc(100vh - 956px)); height: max(84px, calc(100svh - 956px)); }
+  .tl-i { padding: 6px 0; gap: 10px; }
+  .queue-total strong { font-size: 24px; }
+}
+/* 6c · analytics — two columns wide + smaller charts */
+@media (min-width: 768px) {
+  .view[data-view="analytics"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .view[data-view="analytics"] > .ph, .view[data-view="analytics"] > .vtab-row,
+  .view[data-view="analytics"] > .kpis, .view[data-view="analytics"] > .duo { grid-column: 1 / -1; }
+  .view[data-view="analytics"] .chart { min-height: 130px; }
+  .view[data-view="analytics"] .kpi { min-height: 68px; padding: 8px 12px; }
+  #composeText { height: 168px; }
+}
+/* Analytics wide: the two chart duos sit side by side (four mini-panels, one row) */
+@media (min-width: 1280px) {
+  .view[data-view="analytics"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .view[data-view="analytics"] > .duo { grid-column: span 2; }
+}
+/* 6 · view-specific fits */
+@media (min-width: 768px) {
+  .view[data-view="browse"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+}
+/* Email + Branding — secondary content moves sideways at ≥768 so the page
+   stays one screen on every device */
+@media (min-width: 768px) {
+  .view[data-view="email"] { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+  .view[data-view="email"] > .ph { grid-column: 1 / -1; }
+  .view[data-view="branding"] { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+  .view[data-view="branding"] > .ph { grid-column: 1 / -1; }
+  .view[data-view="branding"] .brand-grid { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .view[data-view="branding"] #brandFields { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .view[data-view="branding"] { gap: 12px; }
+  .view[data-view="branding"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .cprev { max-height: 130px; min-height: 0; overflow-y: auto; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   v1.1.3 — LOW-SCREEN DESKTOPS (≤979px viewport tall: 1366×768, 1440×900).
+   Same one-page rule, tighter budget: smaller gaps/paddings, one-line
+   descriptions, shorter composer, denser table rows. The 100vh-based caps
+   above already shrink automatically; this block handles the fixed bits.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (min-width: 1024px) and (max-height: 979px) {
+  .view { gap: 10px; padding: 12px 18px 14px; }
+  .card { padding: 10px 14px; }
+  .card-h { margin-bottom: 8px; font-size: 14px; }
+  .ph { gap: 10px; }
+  .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .t td { padding: 7px 12px; }
+  .sw-card { padding: 8px 12px; }
+  .kpi { padding: 8px 12px; }
+  .page-heading h1 { font-size: 20px; line-height: 28px; }
+  .pausebar { padding: 8px 12px; }
+  #composeText { height: 130px; }
+  .cprev { max-height: 100px; }
+  .view[data-view="home"] .home-chart-svg { height: max(84px, calc(100vh - 1010px)); height: max(84px, calc(100svh - 1010px)); }
+  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: max(80px, calc(100vh - 1000px)); max-height: max(80px, calc(100svh - 1000px)); }
+  .view[data-view="routing"] #matrixBox { max-height: max(140px, calc(100vh - 700px)); max-height: max(140px, calc(100svh - 700px)); overflow-y: auto; scrollbar-width: thin; }
+  .view[data-view="analytics"] .chart { min-height: 100px; }
+  .view[data-view="analytics"] .kpis .kpi { min-height: 52px; padding: 6px 10px; }
+  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+5) { display: none; }
+  .view[data-view="posts"] { gap: 8px; }
+  .view[data-view="posts"] .rosw-row { display: none; }
+  .view[data-view="posts"] .card { padding: 8px 12px; }
+  .set-body { gap: 10px; }
+  .set-group.on { gap: 10px; }
+  .set-nav { padding: 3px; }
+  .set-tab { height: 30px; }
+  .set-body .card { padding: 8px 12px; }
+
+  /* v1.1.3b — 1440×900 residuals */
+  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 68px; }
+  .view[data-view="routing"] { gap: 8px; }
+  .view[data-view="routing"] #matrixBox { max-height: max(112px, calc(100svh - 780px)); }
+  .view[data-view="newpost"] { gap: 8px; }
+  .view[data-view="newpost"] .card { padding: 8px 12px; }
+  .view[data-view="newpost"] #composeText { height: 100px; }
+  .view[data-view="newpost"] .cprev { max-height: 70px; }
+  .view[data-view="aireply"] { gap: 8px; }
+  .view[data-view="aireply"] #aireplyPrompt { height: 60px; }
+  .view[data-view="analytics"] .bar-stack { min-height: 40px; }
+  .view[data-view="analytics"] .bar-label { font-size: 8px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
+  .view[data-view="analytics"] #anMedia .k-s { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view[data-view="health"] .chart { min-height: 80px; }
+  .view[data-view="health"] .t td { padding: 6px 10px; }
+  .view[data-view="health"] .tw { max-height: max(180px, calc(100svh - 760px)); overflow-y: auto; }
+  .view[data-view="health"] .kpis .kpi { min-height: 44px; padding: 4px 8px; }
+  .view[data-view="health"] { gap: 8px; }
+  .view[data-view="routing"] #piText { height: 58px; }
+  .view[data-view="routing"] .card { padding: 8px 12px; }
+  .view[data-view="newpost"] #composeText { height: 76px; }
+  .view[data-view="newpost"] .cprev { max-height: 56px; }
+  .view[data-view="analytics"] .tw { max-height: max(140px, calc(100svh - 900px)); overflow-y: auto; }
+  .view[data-view="analytics"] { gap: 8px; }
+  #healthParts { max-height: 160px; }
+  #activityFeed { max-height: 200px; }
+}
+
+/* v1.1.3b — SHORT-SCREEN desktop (≥1024px wide, ≤800px tall → clientH ≤736).
+   1366×768 laptops: one more compression tier on top of LOW-SCREEN. */
+@media (min-width: 1024px) and (max-height: 800px) {
+  .view { gap: 7px; padding: 8px 14px 10px; }
+  .card { padding: 6px 10px; }
+  .card-h { margin-bottom: 4px; font-size: 13.5px; }
+  .ph h2 { font-size: 17px; line-height: 22px; }
+  /* sub-tab rows (Routing|Rules, Health|Logs|Audit, …) hide — the sidebar keeps
+     every view reachable; the rows reappear at ≥801px window height */
+  .view .vtab-row { display: none; }
+  .page-heading h1 { font-size: 18px; line-height: 24px; }
+  .page-heading #homeSub { display: none; }
+  .pausebar { padding: 5px 10px; }
+  .t td { padding: 5px 10px; }
+
+  .view[data-view="home"] #kpiGrid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .view[data-view="home"] #kpiGrid .kpi { min-height: 0; padding: 6px 8px; gap: 1px; }
+  .view[data-view="home"] .k-v { font-size: 17px; line-height: 20px; }
+  .view[data-view="home"] .k-l, .view[data-view="home"] .k-s { font-size: 10px; }
+  .view[data-view="home"] .home-chart-svg { height: 64px; }
+  .view[data-view="home"] #homeChartFoot { display: none; }
+  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+4) { display: none; }
+  .view[data-view="home"] .tl-i { padding: 6px 0; }
+  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 64px; }
+
+  .view[data-view="settings"] .set-nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .view[data-view="settings"] .set-tab { height: 26px; padding: 0 10px; font-size: 12px; }
+  .set-body .card { padding: 6px 10px; }
+  .set-group.on { gap: 8px; }
+
+  .view[data-view="analytics"] { gap: 6px; padding: 10px 16px; }
+  .view[data-view="analytics"] .chart { min-height: 60px; }
+  .view[data-view="analytics"] .bar-stack { min-height: 32px; }
+  .view[data-view="analytics"] .bar-label { font-size: 8px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
+  .view[data-view="analytics"] #anMedia .k-s { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view[data-view="analytics"] .kpis .kpi { min-height: 44px; padding: 4px 8px; }
+  .view[data-view="analytics"] .tw { max-height: max(120px, calc(100svh - 860px)); overflow-y: auto; }
+
+  .view[data-view="health"] .chart { min-height: 60px; }
+  .view[data-view="health"] .tw { max-height: 160px; overflow-y: auto; }
+
+  .view[data-view="sources"] .tw { max-height: 180px; overflow-y: auto; }
+  .view[data-view="scheduled"] #queueList { max-height: 160px; overflow-y: auto; }
+  .view[data-view="media"] .sw-grid { max-height: 240px; overflow-y: auto; }
+  .view[data-view="posts"] .tw { max-height: 340px; overflow-y: auto; }
+  .view[data-view="newpost"] #composeText { height: 90px; }
+  .view[data-view="newpost"] .cprev { max-height: 60px; }
+  .view[data-view="branding"] { gap: 8px; }
+  .view[data-view="branding"] #swBrand { max-height: 100px; }
+  .view[data-view="branding"] .brand-grid { gap: 8px; }
+  .view[data-view="branding"] .field { margin: 6px 0; }
+  .view[data-view="branding"] .in { height: 30px; }
+
+  /* v1.1.3b2 — measured residuals @704 clientH */
+  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+3) { display: none; }
+  .view[data-view="home"] #homeSwitchChips { display: none; }
+  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 52px; }
+  .view[data-view="home"] #kpiGrid .kpi { padding: 4px 8px; }
+  .view[data-view="home"] .k-v { font-size: 16px; line-height: 18px; }
+
+  .view[data-view="settings"] .set-group.on { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+
+  .view[data-view="routing"] #piText { height: 58px; }
+  .view[data-view="routing"] #swRouting { max-height: 140px; overflow-y: auto; scrollbar-width: thin; }
+
+  .view[data-view="newpost"] .in { height: 30px; }
+  .view[data-view="newpost"] .field { margin-top: 8px; }
+  .view[data-view="newpost"] .row-form { gap: 6px; }
+  .view[data-view="newpost"] #composeText { height: 72px; }
+  .view[data-view="newpost"] .cprev { max-height: 48px; }
+
+  .view[data-view="health"] #healthParts { max-height: 180px; overflow-y: auto; scrollbar-width: thin; }
+  .view[data-view="health"] #scoreDial { max-width: 120px; margin: 0 auto; }
+  .view[data-view="health"] #scoreDial svg { width: 120px; height: 120px; }
+
+  .view[data-view="scheduled"] #schedText { height: 44px; }
+  .view[data-view="scheduled"] .row-form { gap: 6px; }
+  .view[data-view="scheduled"] #queueList { max-height: 140px; }
+
+  .view[data-view="media"] #mlGrid { max-height: 200px; overflow-y: auto; scrollbar-width: thin; }
+  .view[data-view="media"] #swLibrary { max-height: 120px; overflow-y: auto; scrollbar-width: thin; }
+
+  .view[data-view="posts"] .tw { max-height: 300px; overflow-y: auto; }
+
+  .view[data-view="aireply"] #swAireply, .view[data-view="aireply"] #swReplyKb { max-height: 140px; overflow-y: auto; scrollbar-width: thin; }
+  .view[data-view="aireply"] #kbList { max-height: 80px; overflow-y: auto; scrollbar-width: thin; }
+  .view[data-view="aireply"] .row-form { flex-wrap: nowrap; gap: 6px; }
+  .view[data-view="aireply"] .row-form .in { flex: 1; min-width: 0; }
+  .view[data-view="health"] #healthParts { max-height: 140px; }
+  .view[data-view="newpost"] #composeText { height: 60px; }
+  .view[data-view="newpost"] .cprev { max-height: 40px; }
+  .view[data-view="newpost"] .field { margin-top: 6px; }
+  .view[data-view="branding"] .in { height: 28px; }
+  .view[data-view="branding"] .field { margin: 4px 0; }
+  .view[data-view="posts"] .card { padding: 6px 10px; }
+  .view[data-view="posts"] .card-h { margin-bottom: 4px; }
+  .view[data-view="media"] .card { padding: 6px 10px; }
+
+  .view[data-view="bulk"] { gap: 8px; }
+
+  /* v1.1.3b3 — final micro-pass @704 */
+  .view[data-view="newpost"] #composeText { height: 36px; }
+  .view[data-view="newpost"] .cprev { max-height: 32px; }
+  .view[data-view="newpost"] #composeCardBtn, .view[data-view="newpost"] #snippetManage { display: none; }
+  .view[data-view="newpost"] #composeSnippetRow, .view[data-view="newpost"] #libPromptPick { display: none; }
+  .view[data-view="newpost"] .field { margin-top: 4px; }
+  .view[data-view="newpost"] .plan-week { display: none; }
+
+  .view[data-view="posts"] { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
+  .view[data-view="posts"] .ph { grid-column: 1 / -1; }
+  .view[data-view="posts"] > :nth-child(2) { grid-column: 1 / -1; }
+
+  .view[data-view="settings"] .set-nav { padding: 2px; }
+  .view[data-view="settings"] .set-tab { height: 24px; }
+  .set-body { gap: 6px; }
+  .set-group.on { gap: 6px; }
+  .set-body .card { padding: 5px 8px; }
+
+  .view[data-view="branding"] #swBrand { max-height: 72px; }
+  .view[data-view="branding"] .sw-card { padding: 6px 10px; }
+
+  .view[data-view="media"] .card { padding: 5px 8px; }
+  .view[data-view="media"] { gap: 6px; }
+
+  .view[data-view="aireply"] #kbList { max-height: 48px; }
+  .view[data-view="aireply"] #aireplyPrompt { height: 56px; }
+  .view[data-view="aireply"] .card { padding: 5px 8px; }
+  .view[data-view="aireply"] .card-h { margin-bottom: 2px; }
+  .view[data-view="aireply"] .ph h2 { font-size: 16px; line-height: 20px; }
+  .view[data-view="aireply"] { gap: 6px; }
+
+  .set-body .card { padding: 4px 8px; }
+  .view[data-view="settings"] .set-tab { height: 22px; }
+  .view[data-view="settings"] .ph h2 { font-size: 16px; line-height: 20px; }
+  .set-group.on { gap: 4px; }
+  .view[data-view="settings"] { gap: 5px; padding: 6px 14px 8px; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   v1.1.3 — TABLET PORTRAIT (768–1023). Narrow columns wrap text, so the
+   fixed-height bits get one more notch of compression on top of the 768+
+   density rules; the 100vh caps already shrink with the viewport.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .view[data-view="home"] { gap: 8px; padding: 12px 16px 12px; }
+  .view[data-view="home"] .live-badge { display: none; }
+  .view[data-view="home"] .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .view[data-view="home"] .kpis .kpi { min-height: 0; padding: 6px 8px; }
+  .view[data-view="home"] .k-v { font-size: 17px; line-height: 22px; }
+  .view[data-view="home"] .home-chart-svg { height: 72px; }
+  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+5) { display: none; }
+  .view[data-view="analytics"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view[data-view="analytics"] .heat { font-size: 9px; gap: 1px; }
+  .view[data-view="branding"] #swBrand { max-height: 180px; }
+  .view[data-view="health"] .t td { padding: 6px 10px; }
+  .view[data-view="health"] .chart { min-height: 90px; }
+  .view[data-view="newpost"] { gap: 8px; padding: 12px 16px; }
+  #composeText { height: 120px; }
+  /* keep the two-card rows side by side (the 768–1023 token block stacks them) */
+  .view[data-view="analytics"] .duo, .view[data-view="health"] .duo { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .view[data-view="analytics"] .kpis { grid-template-columns: repeat(4, 1fr); }
+  .view[data-view="analytics"] #anKpis { grid-template-columns: repeat(4, 1fr); }
+  .view[data-view="analytics"] > :nth-child(7) { grid-column: auto; }
+  .view[data-view="analytics"] .heat { font-size: 8px; }
+  .view[data-view="analytics"] { gap: 12px; padding: 12px 16px; }
+  .view[data-view="analytics"] .ph { flex-wrap: nowrap; }
+  .view[data-view="analytics"] .chart { min-height: 80px; }
+  .view[data-view="analytics"] .card { padding: 8px 12px; }
+  .home-grid { grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); gap: 12px; }
+  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 120px; }
+  .view[data-view="branding"] { gap: 8px; }
+  .view[data-view="branding"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view[data-view="branding"] #brandFields { gap: 6px; }
+  .view[data-view="branding"] #brandPresets { gap: 6px; }
+  .view[data-view="branding"] .brand-grid { gap: 10px; }
+  .view[data-view="branding"] #swBrand { max-height: 152px; }
+  .view[data-view="sources"] { gap: 10px; }
+  .view[data-view="analytics"] { gap: 10px; }
+  .view[data-view="analytics"] .kpis .kpi { min-height: 56px; padding: 6px 10px; }
+  .view[data-view="analytics"] .tw { max-height: max(150px, calc(100svh - 990px)); overflow-y: auto; }
+  .view[data-view="analytics"] .bar-stack { min-height: 40px; }
+  .view[data-view="analytics"] .bar-label { font-size: 8px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
+  .view[data-view="analytics"] #anMedia .k-s { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+  .view[data-view="sources"] .tw { max-height: max(400px, calc(100svh - 700px)); overflow-y: auto; }
+  .view[data-view="settings"] { gap: 10px; padding: 12px 16px; }
+  .set-body { gap: 10px; }
+  .set-group.on { gap: 10px; }
+  .set-nav { padding: 3px; }
+  .set-tab { height: 30px; }
+  .set-body .card { padding: 8px 12px; }
+  .view[data-view="sources"], .view[data-view="approvals"] { gap: 12px; }
+  .view[data-view="sources"] .ph-d, .view[data-view="approvals"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 }

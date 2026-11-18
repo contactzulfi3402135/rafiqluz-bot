@@ -24,7 +24,7 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=s15">
+<link rel="stylesheet" href="/app.css?v=s17">
 </head>
 <body>
 <div class="app" id="app">
@@ -418,7 +418,7 @@ try {
           <div class="ph-l"><h2>Compose</h2><div class="ph-d">Write a post and publish it to your channels — optionally cleaned up by AI first.</div></div>
         </div>
         <!-- 5H (R88): “Plan my week” → drafts in the Approval Queue -->
-        <div class="card">
+        <div class="card plan-week">
           <div class="card-h">Plan my week <%- icon('calendar','icon') %> <span class="muted tiny">— AI drafts 7 days of posts for your approval</span></div>
           <div class="card-b">
             <p class="muted tiny f-help">The AI looks at your recent posts and drafts the next 7 days (one per day, varied in tone). Nothing is published — every draft lands in the <b>Approval Queue</b> for you to edit, approve or reject. Uses your AI key (Settings → AI).</p>
@@ -1274,7 +1274,7 @@ try {
           <div class="card-h">Leaderboard <span class="muted tiny">— sources ranked by published, with 7-day sparkline and goal hit-rate</span></div>
           <div class="card-b"><div class="tw"><table class="t" id="anBoard"><thead><tr><th class="num">#</th><th>Source</th><th class="num">Published</th><th>Share</th><th class="num">Media</th><th class="num">Failed</th><th>7-day</th><th class="num">Goal</th></tr></thead><tbody></tbody></table></div></div>
         </div>
-        <div class="duo">
+        <div class="duo" id="anGoalsDuo">
           <div class="card">
             <div class="card-h">Goals <span class="muted tiny">— daily publish targets (today, PKT)</span></div>
             <div class="card-b">
@@ -1914,6 +1914,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=s14"></script>
+<script src="/app.js?v=s17"></script>
 </body>
 </html>
