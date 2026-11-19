@@ -2253,34 +2253,7 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
    Mockup-faithful light theme on mobile + overlap/overflow fixes.
    Every rule lives inside ONE max-767px block: desktop (≥768px) untouched. */
 @media (max-width: 767px) {
-  /* mockup light look for the default theme; explicit light/glass picks keep their own tokens */
-  :root:not([data-theme="light"]):not([data-theme="glass"]) {
-    --bg: #F8FAFC;
-    --surface: #FFFFFF;
-    --surface-1: #FFFFFF;
-    --surface-2: #F1F5F9;
-    --surface-3: #E2E8F0;
-    --border-1: #E2E8F0;
-    --border-2: #CBD5E1;
-    --success-text: #047857;
-    --warning-text: #B45309;
-    --error-text: #BE123C;
-    --info-text: #1D4ED8;
-    color-scheme: light;
-    --text-1: #0F172A;
-    --text-2: #334155;
-    --text-3: #64748B;
-    --accent: #059669;
-    --accent-2: #047857;
-    --accent-soft: #ECFDF5;
-    --ok: #059669;
-    --warn: #D97706;
-    --bad: #E11D48;
-    --sh1: 0 1px 2px rgba(15, 23, 42, .05);
-    --sh2: 0 8px 24px rgba(15, 23, 42, .08);
-    --topbar-shadow: 0 1px 2px rgba(15, 23, 42, .04);
-  }
-
+  /* Design and colour-mode tokens remain intact on phones. */
   /* topbar — one line, zero overflow (audit: search cluster pushed right edge to 427px) */
   .command-search { display: none; }
   .topbar { gap: 6px; }
@@ -2457,43 +2430,6 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 .card.collapsible > .card-h .chev { transition: transform var(--dur) var(--ease); }
 .card.collapsible.collapsed > .card-h .chev { transform: rotate(-90deg); }
 
-/* 2 · density — desktop + tablet (all widths ≥768) */
-@media (min-width: 768px) {
-  .view { padding: 18px 20px 20px; gap: 14px; }
-  .card { padding: 14px 16px; }
-  .card-h { font-size: 14.5px; line-height: 22px; margin-bottom: 10px; }
-  .page-heading h1 { font-size: 26px; line-height: 34px; }
-  .ph h2 { font-size: 20px; line-height: 28px; }
-  .ph-d { font-size: 12.5px; }
-  .eyebrow { margin-bottom: 4px; }
-  .kpi { min-height: 84px; padding: 12px 14px; gap: 2px; }
-  .k-v { font-size: 26px; line-height: 34px; }
-  .t td { padding: 9px 12px; }
-  .t th { padding: 8px 12px; }
-  .sw-card { padding: 10px 14px; gap: 12px; }
-  .set-body { gap: 12px; }
-  .set-group.on { gap: 12px; }
-  .set-wrap { gap: 14px; }
-  .set-tab { height: 44px; }
-  .home-grid { gap: 14px; }
-  .home-col { gap: 14px; }
-  .home-chart-svg { height: 148px; }
-  .tl { gap: 0; }
-  .rosw { height: 30px; }
-  /* data-safe: health tables (boot log / self-test history) and the activity
-     feed grow with usage — cap them so the view stays one page */
-  #healthParts { max-height: 200px; overflow-y: auto; scrollbar-width: thin; }
-  .view[data-view="health"] .tw { max-height: 200px; overflow-y: auto; }
-  #activityFeed { max-height: 220px; overflow-y: auto; scrollbar-width: thin; }
-
-  /* sidebar — all 5 categories + 20 items on one screen (1080p) */
-  .sidebar { padding: 12px 10px 10px; }
-  .sb-head { height: 48px; }
-  .sb-item { height: 44px; font-size: 14.5px; gap: 12px; padding: 0 12px; }
-  .sb-group { height: 30px; margin-top: 10px; }
-  .side-health { padding: 4px 10px; }
-}
-
 /* 3 · internal-scroll panels — the list scrolls in-card, the page doesn't.
    C per view = (chrome above the table) + card-h + card padding, so the cap
    lands the view exactly at 100vh client height on a 1080p desktop; the
@@ -2573,22 +2509,6 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .brand-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 
-/* 6b · home — compress the overview so the whole desk fits */
-@media (min-width: 768px) {
-  .view[data-view="home"] { padding: 14px 20px 14px; gap: 10px; }
-  .view[data-view="home"] .page-heading { gap: 8px; }
-  .view[data-view="home"] .page-heading h1 { font-size: 22px; line-height: 30px; }
-  .view[data-view="home"] .page-heading p { font-size: 12px; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .view[data-view="home"] .kpi { padding: 10px 12px; }
-  .view[data-view="home"] .k-v { font-size: 26px; line-height: 34px; }
-  .view[data-view="home"] .pb-t span { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .pausebar { padding: 10px 14px; gap: 12px; }
-  .pausebar .pb-t b { font-size: 14px; }
-  .kpi { min-height: 76px; }
-  .home-chart-svg { height: max(84px, calc(100vh - 956px)); height: max(84px, calc(100svh - 956px)); }
-  .tl-i { padding: 6px 0; gap: 10px; }
-  .queue-total strong { font-size: 24px; }
-}
 /* 6c · analytics — two columns wide + smaller charts */
 @media (min-width: 768px) {
   .view[data-view="analytics"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -2624,261 +2544,8 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
   .cprev { max-height: 130px; min-height: 0; overflow-y: auto; }
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   v1.1.3 — LOW-SCREEN DESKTOPS (≤979px viewport tall: 1366×768, 1440×900).
-   Same one-page rule, tighter budget: smaller gaps/paddings, one-line
-   descriptions, shorter composer, denser table rows. The 100vh-based caps
-   above already shrink automatically; this block handles the fixed bits.
-   ════════════════════════════════════════════════════════════════════════ */
-@media (min-width: 1024px) and (max-height: 979px) {
-  .view { gap: 14px; padding: 14px 18px 16px; }
-  .card { padding: 12px 14px; }
-  .card-h { margin-bottom: 8px; font-size: 14px; }
-  .ph { gap: 10px; }
-  .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .t td { padding: 7px 12px; }
-  .sw-card { padding: 12px 14px; }
-  .kpi { padding: 8px 12px; }
-  .page-heading h1 { font-size: 20px; line-height: 28px; }
-  .pausebar { padding: 8px 12px; }
-  #composeText { height: 130px; }
-  .cprev { max-height: 100px; }
-  .view[data-view="home"] .home-chart-svg { height: max(84px, calc(100vh - 1010px)); height: max(84px, calc(100svh - 1010px)); }
-  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: max(80px, calc(100vh - 1000px)); max-height: max(80px, calc(100svh - 1000px)); }
-  .view[data-view="routing"] #matrixBox { max-height: max(140px, calc(100vh - 700px)); max-height: max(140px, calc(100svh - 700px)); overflow-y: auto; scrollbar-width: thin; }
-  .view[data-view="analytics"] .chart { min-height: 100px; }
-  .view[data-view="analytics"] .kpis .kpi { min-height: 52px; padding: 6px 10px; }
-  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+5) { display: none; }
-  .view[data-view="posts"] { gap: 8px; }
-  .view[data-view="posts"] .rosw-row { display: none; }
-  .view[data-view="posts"] .card { padding: 12px 14px; }
-  .set-body { gap: 10px; }
-  .set-group.on { gap: 10px; }
-  .set-nav { padding: 3px; }
-  .set-tab { height: 44px; }
-  .set-body .card { padding: 12px 14px; }
-
-  /* v1.1.3b — 1440×900 residuals */
-  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 68px; }
-  .view[data-view="routing"] { gap: 8px; }
-  .view[data-view="routing"] #matrixBox { max-height: max(112px, calc(100svh - 780px)); }
-  .view[data-view="newpost"] { gap: 8px; }
-  .view[data-view="newpost"] .card { padding: 12px 14px; }
-  .view[data-view="newpost"] #composeText { height: 100px; }
-  .view[data-view="newpost"] .cprev { max-height: 70px; }
-  .view[data-view="aireply"] { gap: 8px; }
-  .view[data-view="aireply"] #aireplyPrompt { height: 60px; }
-  .view[data-view="analytics"] .bar-stack { min-height: 40px; }
-  .view[data-view="analytics"] .bar-label { font-size: 8px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
-  .view[data-view="analytics"] #anMedia .k-s { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .view[data-view="health"] .chart { min-height: 80px; }
-  .view[data-view="health"] .t td { padding: 6px 10px; }
-  .view[data-view="health"] .tw { max-height: max(180px, calc(100svh - 760px)); overflow-y: auto; }
-  .view[data-view="health"] .kpis .kpi { min-height: 44px; padding: 4px 8px; }
-  .view[data-view="health"] { gap: 8px; }
-  .view[data-view="routing"] #piText { height: 58px; }
-  .view[data-view="routing"] .card { padding: 12px 14px; }
-  .view[data-view="newpost"] #composeText { height: 76px; }
-  .view[data-view="newpost"] .cprev { max-height: 56px; }
-  .view[data-view="analytics"] .tw { max-height: max(140px, calc(100svh - 900px)); overflow-y: auto; }
-  .view[data-view="analytics"] { gap: 8px; }
-  #healthParts { max-height: 160px; }
-  #activityFeed { max-height: 200px; }
-}
-
-/* v1.1.3b — SHORT-SCREEN desktop (≥1024px wide, ≤800px tall → clientH ≤736).
-   1366×768 laptops: one more compression tier on top of LOW-SCREEN. */
-@media (min-width: 1024px) and (max-height: 800px) {
-  .view { gap: 12px; padding: 12px 14px 14px; }
-  .card { padding: 12px 14px; }
-  .card-h { margin-bottom: 4px; font-size: 13.5px; }
-  .ph h2 { font-size: 17px; line-height: 22px; }
-  /* sub-tab rows (Routing|Rules, Health|Logs|Audit, …) hide — the sidebar keeps
-     every view reachable; the rows reappear at ≥801px window height */
-  .view .vtab-row { display: none; }
-  .page-heading h1 { font-size: 18px; line-height: 24px; }
-  .page-heading #homeSub { display: none; }
-  .pausebar { padding: 5px 10px; }
-  .t td { padding: 5px 10px; }
-
-  .view[data-view="home"] #kpiGrid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .view[data-view="home"] #kpiGrid .kpi { min-height: 0; padding: 6px 8px; gap: 1px; }
-  .view[data-view="home"] .k-v { font-size: 17px; line-height: 20px; }
-  .view[data-view="home"] .k-l, .view[data-view="home"] .k-s { font-size: 10px; }
-  .view[data-view="home"] .home-chart-svg { height: 64px; }
-  .view[data-view="home"] #homeChartFoot { display: none; }
-  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+4) { display: none; }
-  .view[data-view="home"] .tl-i { padding: 6px 0; }
-  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 64px; }
-
-  .view[data-view="settings"] .set-nav { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-  .view[data-view="settings"] .set-tab { height: 44px; padding: 0 12px; font-size: 14px; }
-  .set-body .card { padding: 12px 14px; }
-  .set-group.on { gap: 8px; }
-
-  .view[data-view="analytics"] { gap: 6px; padding: 10px 16px; }
-  .view[data-view="analytics"] .chart { min-height: 60px; }
-  .view[data-view="analytics"] .bar-stack { min-height: 32px; }
-  .view[data-view="analytics"] .bar-label { font-size: 8px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
-  .view[data-view="analytics"] #anMedia .k-s { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .view[data-view="analytics"] .kpis .kpi { min-height: 44px; padding: 4px 8px; }
-  .view[data-view="analytics"] .tw { max-height: max(120px, calc(100svh - 860px)); overflow-y: auto; }
-
-  .view[data-view="health"] .chart { min-height: 60px; }
-  .view[data-view="health"] .tw { max-height: 160px; overflow-y: auto; }
-
-  .view[data-view="sources"] .tw { max-height: 180px; overflow-y: auto; }
-  .view[data-view="scheduled"] #queueList { max-height: 160px; overflow-y: auto; }
-  .view[data-view="media"] .sw-grid { max-height: 240px; overflow-y: auto; }
-  .view[data-view="posts"] .tw { max-height: 340px; overflow-y: auto; }
-  .view[data-view="newpost"] #composeText { height: 90px; }
-  .view[data-view="newpost"] .cprev { max-height: 60px; }
-  .view[data-view="branding"] { gap: 8px; }
-  .view[data-view="branding"] #swBrand { max-height: 100px; }
-  .view[data-view="branding"] .brand-grid { gap: 8px; }
-  .view[data-view="branding"] .field { margin: 6px 0; }
-  .view[data-view="branding"] .in { height: 42px; }
-
-  /* v1.1.3b2 — measured residuals @704 clientH */
-  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+3) { display: none; }
-  .view[data-view="home"] #homeSwitchChips { display: none; }
-  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 52px; }
-  .view[data-view="home"] #kpiGrid .kpi { padding: 4px 8px; }
-  .view[data-view="home"] .k-v { font-size: 16px; line-height: 18px; }
-
-  .view[data-view="settings"] .set-group.on { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
-
-  .view[data-view="routing"] #piText { height: 58px; }
-  .view[data-view="routing"] #swRouting { max-height: 140px; overflow-y: auto; scrollbar-width: thin; }
-
-  .view[data-view="newpost"] .in { height: 42px; }
-  .view[data-view="newpost"] .field { margin-top: 8px; }
-  .view[data-view="newpost"] .row-form { gap: 10px; }
-  .view[data-view="newpost"] #composeText { height: 72px; }
-  .view[data-view="newpost"] .cprev { max-height: 48px; }
-
-  .view[data-view="health"] #healthParts { max-height: 180px; overflow-y: auto; scrollbar-width: thin; }
-  .view[data-view="health"] #scoreDial { max-width: 120px; margin: 0 auto; }
-  .view[data-view="health"] #scoreDial svg { width: 120px; height: 120px; }
-
-  .view[data-view="scheduled"] #schedText { height: 44px; }
-  .view[data-view="scheduled"] .row-form { gap: 10px; }
-  .view[data-view="scheduled"] #queueList { max-height: 140px; }
-
-  .view[data-view="media"] #mlGrid { max-height: 200px; overflow-y: auto; scrollbar-width: thin; }
-  .view[data-view="media"] #swLibrary { max-height: 120px; overflow-y: auto; scrollbar-width: thin; }
-
-  .view[data-view="posts"] .tw { max-height: 300px; overflow-y: auto; }
-
-  .view[data-view="aireply"] #swAireply, .view[data-view="aireply"] #swReplyKb { max-height: 140px; overflow-y: auto; scrollbar-width: thin; }
-  .view[data-view="aireply"] #kbList { max-height: 80px; overflow-y: auto; scrollbar-width: thin; }
-  .view[data-view="aireply"] .row-form { flex-wrap: nowrap; gap: 6px; }
-  .view[data-view="aireply"] .row-form .in { flex: 1; min-width: 0; }
-  .view[data-view="health"] #healthParts { max-height: 140px; }
-  .view[data-view="newpost"] #composeText { height: 60px; }
-  .view[data-view="newpost"] .cprev { max-height: 40px; }
-  .view[data-view="newpost"] .field { margin-top: 6px; }
-  .view[data-view="branding"] .in { height: 42px; }
-  .view[data-view="branding"] .field { margin: 4px 0; }
-  .view[data-view="posts"] .card { padding: 12px 14px; }
-  .view[data-view="posts"] .card-h { margin-bottom: 4px; }
-  .view[data-view="media"] .card { padding: 12px 14px; }
-
-  .view[data-view="bulk"] { gap: 8px; }
-
-  /* v1.1.3b3 — final micro-pass @704 */
-  .view[data-view="newpost"] #composeText { height: 36px; }
-  .view[data-view="newpost"] .cprev { max-height: 32px; }
-  .view[data-view="newpost"] #composeCardBtn, .view[data-view="newpost"] #snippetManage { display: none; }
-  .view[data-view="newpost"] #composeSnippetRow, .view[data-view="newpost"] #libPromptPick { display: none; }
-  .view[data-view="newpost"] .field { margin-top: 4px; }
-  .view[data-view="newpost"] .plan-week { display: none; }
-
-  .view[data-view="posts"] { display: grid; grid-template-columns: 1fr 1fr; align-items: start; }
-  .view[data-view="posts"] .ph { grid-column: 1 / -1; }
-  .view[data-view="posts"] > :nth-child(2) { grid-column: 1 / -1; }
-
-  .view[data-view="settings"] .set-nav { padding: 2px; }
-  .view[data-view="settings"] .set-tab { height: 44px; }
-  .set-body { gap: 6px; }
-  .set-group.on { gap: 6px; }
-  .set-body .card { padding: 12px 14px; }
-
-  .view[data-view="branding"] #swBrand { max-height: 72px; }
-  .view[data-view="branding"] .sw-card { padding: 12px 14px; }
-
-  .view[data-view="media"] .card { padding: 12px 14px; }
-  .view[data-view="media"] { gap: 6px; }
-
-  .view[data-view="aireply"] #kbList { max-height: 48px; }
-  .view[data-view="aireply"] #aireplyPrompt { height: 56px; }
-  .view[data-view="aireply"] .card { padding: 12px 14px; }
-  .view[data-view="aireply"] .card-h { margin-bottom: 2px; }
-  .view[data-view="aireply"] .ph h2 { font-size: 16px; line-height: 20px; }
-  .view[data-view="aireply"] { gap: 6px; }
-
-  .set-body .card { padding: 12px 14px; }
-  .view[data-view="settings"] .set-tab { height: 44px; }
-  .view[data-view="settings"] .ph h2 { font-size: 16px; line-height: 20px; }
-  .set-group.on { gap: 4px; }
-  .view[data-view="settings"] { gap: 5px; padding: 6px 14px 8px; }
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   v1.1.3 — TABLET PORTRAIT (768–1023). Narrow columns wrap text, so the
-   fixed-height bits get one more notch of compression on top of the 768+
-   density rules; the 100vh caps already shrink with the viewport.
-   ════════════════════════════════════════════════════════════════════════ */
-@media (min-width: 768px) and (max-width: 1023px) {
-  .view[data-view="home"] { gap: 8px; padding: 12px 16px 12px; }
-  .view[data-view="home"] .live-badge { display: none; }
-  .view[data-view="home"] .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .view[data-view="home"] .kpis .kpi { min-height: 0; padding: 6px 8px; }
-  .view[data-view="home"] .k-v { font-size: 17px; line-height: 22px; }
-  .view[data-view="home"] .home-chart-svg { height: 72px; }
-  .view[data-view="home"] #activityFeed .tl-i:nth-child(n+5) { display: none; }
-  .view[data-view="analytics"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .view[data-view="analytics"] .heat { font-size: 9px; gap: 1px; }
-  .view[data-view="branding"] #swBrand { max-height: 180px; }
-  .view[data-view="health"] .t td { padding: 6px 10px; }
-  .view[data-view="health"] .chart { min-height: 90px; }
-  .view[data-view="newpost"] { gap: 8px; padding: 12px 16px; }
-  #composeText { height: 120px; }
-  /* keep the two-card rows side by side (the 768–1023 token block stacks them) */
-  .view[data-view="analytics"] .duo, .view[data-view="health"] .duo { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .view[data-view="analytics"] .kpis { grid-template-columns: repeat(4, 1fr); }
-  .view[data-view="analytics"] #anKpis { grid-template-columns: repeat(4, 1fr); }
-  .view[data-view="analytics"] > :nth-child(7) { grid-column: auto; }
-  .view[data-view="analytics"] .heat { font-size: 8px; }
-  .view[data-view="analytics"] { gap: 12px; padding: 12px 16px; }
-  .view[data-view="analytics"] .ph { flex-wrap: nowrap; }
-  .view[data-view="analytics"] .chart { min-height: 80px; }
-  .view[data-view="analytics"] .card { padding: 12px 14px; }
-  .home-grid { grid-template-columns: minmax(0, 1fr) minmax(240px, 300px); gap: 12px; }
-  .view[data-view="home"] #homeQueue, .view[data-view="home"] #homeHealth, .view[data-view="home"] #homePace { max-height: 120px; }
-  .view[data-view="branding"] { gap: 8px; }
-  .view[data-view="branding"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .view[data-view="branding"] #brandFields { gap: 6px; }
-  .view[data-view="branding"] #brandPresets { gap: 6px; }
-  .view[data-view="branding"] .brand-grid { gap: 10px; }
-  .view[data-view="branding"] #swBrand { max-height: 152px; }
-  .view[data-view="sources"] { gap: 10px; }
-  .view[data-view="analytics"] { gap: 10px; }
-  .view[data-view="analytics"] .kpis .kpi { min-height: 56px; padding: 6px 10px; }
-  .view[data-view="analytics"] .tw { max-height: max(150px, calc(100svh - 990px)); overflow-y: auto; }
-  .view[data-view="analytics"] .bar-stack { min-height: 40px; }
-  .view[data-view="analytics"] .bar-label { font-size: 8px; line-height: 1.1; white-space: nowrap; overflow: hidden; }
-  .view[data-view="analytics"] #anMedia .k-s { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-  .view[data-view="sources"] .tw { max-height: max(400px, calc(100svh - 700px)); overflow-y: auto; }
-  .view[data-view="settings"] { gap: 10px; padding: 12px 16px; }
-  .set-body { gap: 10px; }
-  .set-group.on { gap: 10px; }
-  .set-nav { padding: 3px; }
-  .set-tab { height: 44px; }
-  .set-body .card { padding: 12px 14px; }
-  .view[data-view="sources"], .view[data-view="approvals"] { gap: 12px; }
-  .view[data-view="sources"] .ph-d, .view[data-view="approvals"] .ph-d { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-}
+/* Previous height-based compression was removed: screens can scroll,
+   while labels, tabs, editor controls and content stay legible and available. */
 
 /* ═══ v1.2 COMFORT PASS (11.2.0) ═══════════════════════════════════
    Bigger, calmer, better organized — no shrink-to-fit.
@@ -2914,3 +2581,247 @@ hr, .hr { border: 0; border-top: 1px solid var(--border-1); margin: 16px 0; }
 @media (min-width: 1280px) {
   .view { padding: 32px 32px 40px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   RAQIFLUZ / APPEARANCE SYSTEM
+   New visual language, shared functional layout and component hooks.
+   Design identity and colour mode are intentionally independent.
+   ═══════════════════════════════════════════════════════════════════ */
+html[data-theme="light"] {
+  --bg:#f5f4ef; --surface-1:#fffefa; --surface-2:#f1f1eb; --surface-3:#e3e7df;
+  --border-1:#dde2d9; --border-2:#c1cdc0; --text-1:#172522; --text-2:#425751; --text-3:#61756e;
+  --accent:#087d60; --accent-hover:#09644e; --accent-ink:#fff; --accent-soft:#e0f2e9;
+  --success:#13865f; --warning:#c07809; --error:#c0444b; --info:#236bba;
+  --success-text:#087451; --warning-text:#925300; --error-text:#aa303a; --info-text:#205fa5;
+  --success-soft:#def3e8; --warning-soft:#fff0d1; --error-soft:#fbe5e5; --info-soft:#e4efff;
+  --violet:#7653ca; --violet-soft:#ece7fb; --scrim:rgba(18,34,30,.52);
+  --sh-1:0 4px 20px rgba(25,48,40,.045); --kpi-tint-a:.08; color-scheme:light;
+}
+html[data-theme="dark"] {
+  --bg:#101615; --surface-1:#19211f; --surface-2:#222d29; --surface-3:#32413b;
+  --border-1:#34463e; --border-2:#4a6055; --text-1:#f1f8f3; --text-2:#c2d3c8; --text-3:#9bb2a3;
+  --accent:#6de1b2; --accent-hover:#9af2cb; --accent-ink:#08291b; --accent-soft:rgba(86,215,162,.14);
+  --success:#60d9a4; --warning:#f5c06b; --error:#fa8f94; --info:#8cbfff;
+  --success-text:#72e4b4; --warning-text:#ffd08a; --error-text:#ffadb0; --info-text:#a6cbff;
+  --success-soft:rgba(80,205,151,.14); --warning-soft:rgba(245,192,107,.15); --error-soft:rgba(250,143,148,.14); --info-soft:rgba(140,191,255,.14);
+  --violet:#b99aff; --violet-soft:rgba(170,135,255,.17); --scrim:rgba(0,0,0,.72);
+  --sh-1:0 8px 24px rgba(0,0,0,.14); --kpi-tint-a:.12; color-scheme:dark;
+}
+html[data-design="mission"][data-theme="dark"] {
+  --bg:#090c0d; --surface-1:#111719; --surface-2:#182124; --surface-3:#243336;
+  --border-1:#293a3b; --border-2:#48605f; --text-1:#edf8f4; --text-2:#c0d4d0; --text-3:#94adaa;
+  --accent:#69e7ce; --accent-hover:#a0f4e5; --accent-ink:#06251f; --accent-soft:rgba(70,219,192,.13);
+  --sh-1:0 8px 32px rgba(0,0,0,.26);
+}
+html[data-design="mission"][data-theme="light"] {
+  --bg:#edf2f0; --surface-1:#fbfffd; --surface-2:#e6efec; --surface-3:#d6e4df;
+  --border-1:#cdded7; --border-2:#a7c2b9; --text-1:#142c28; --text-2:#365951; --text-3:#58756d;
+  --accent:#007e71; --accent-hover:#00665c; --accent-ink:#fff; --accent-soft:#d7f2e9;
+}
+html[data-design="broadcast"][data-theme="light"] {
+  --bg:#f4f1fa; --surface-1:#fff; --surface-2:#f3eff9; --surface-3:#e7e0f1;
+  --border-1:#e1d9ed; --border-2:#cbbedd; --text-1:#211b31; --text-2:#4e465e; --text-3:#6f6681;
+  --sh-1:0 8px 28px rgba(70,35,100,.08);
+}
+html[data-design="broadcast"][data-theme="dark"] {
+  --bg:#15111b; --surface-1:#211a2a; --surface-2:#30273b; --surface-3:#42364f;
+  --border-1:#4b3c59; --border-2:#6b5877; --text-1:#fbf5ff; --text-2:#dbcee6; --text-3:#b7a8c5;
+  --sh-1:0 10px 30px rgba(0,0,0,.22);
+}
+html[data-design="broadcast"][data-area="overview"][data-theme="light"] {--accent:#087d60;--accent-hover:#05634a;--accent-ink:#fff;--accent-soft:#dcf4e9}
+html[data-design="broadcast"][data-area="publish"][data-theme="light"] {--accent:#a95800;--accent-hover:#824100;--accent-ink:#fff;--accent-soft:#ffedcc}
+html[data-design="broadcast"][data-area="channels"][data-theme="light"] {--accent:#205cb8;--accent-hover:#18458d;--accent-ink:#fff;--accent-soft:#e2edff}
+html[data-design="broadcast"][data-area="audience"][data-theme="light"] {--accent:#7141bd;--accent-hover:#522d91;--accent-ink:#fff;--accent-soft:#f0e7ff}
+html[data-design="broadcast"][data-area="system"][data-theme="light"] {--accent:#a13b70;--accent-hover:#7b2b54;--accent-ink:#fff;--accent-soft:#fbe4f0}
+html[data-design="broadcast"][data-area="overview"][data-theme="dark"] {--accent:#70e4b2;--accent-hover:#a2f4d0;--accent-ink:#08291b;--accent-soft:rgba(112,228,178,.16)}
+html[data-design="broadcast"][data-area="publish"][data-theme="dark"] {--accent:#ffcc79;--accent-hover:#ffe0ac;--accent-ink:#382000;--accent-soft:rgba(255,190,94,.16)}
+html[data-design="broadcast"][data-area="channels"][data-theme="dark"] {--accent:#95beff;--accent-hover:#c0d7ff;--accent-ink:#102c59;--accent-soft:rgba(120,171,255,.17)}
+html[data-design="broadcast"][data-area="audience"][data-theme="dark"] {--accent:#cfadff;--accent-hover:#e7d5ff;--accent-ink:#30134d;--accent-soft:rgba(195,146,255,.18)}
+html[data-design="broadcast"][data-area="system"][data-theme="dark"] {--accent:#ffacd6;--accent-hover:#ffd0e7;--accent-ink:#4b132f;--accent-soft:rgba(255,150,200,.16)}
+
+/* A quieter shell, more room around every screen, and clear wayfinding. */
+html { --maxw:1500px; --r-card:18px; --r-ctl:12px; --tb-h:76px; }
+.sidebar { padding:20px 14px 16px; background:var(--surface-1); }
+.sb-head { min-height:60px; gap:12px; }
+.sb-logo { width:42px; height:42px; border-radius:14px; font-size:20px; }
+.brand-sub { font-size:11px; letter-spacing:.13em; }
+.side-health { padding:10px 12px; margin:8px 2px 14px; }
+.sb-group { min-height:36px; height:auto; font-size:12px; letter-spacing:.08em; }
+.sb-item { min-height:46px; height:auto; padding:10px 12px; }
+.sb-item.on,.sb-item.active,.sb-item[aria-current="page"] { background:var(--accent-soft); color:var(--text-1); }
+.sb-item.on::before,.sb-item.active::before,.sb-item[aria-current="page"]::before { display:none; }
+.topbar { background:var(--surface-1); padding-inline:28px; }
+.design-switch { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px; padding:0 14px; border:1px solid var(--border-1); border-radius:999px; background:var(--surface-2); color:var(--text-1); font-weight:700; white-space:nowrap; }
+.design-switch:hover { border-color:var(--accent); }
+.design-switch span:first-child { color:var(--accent); font-size:20px; }
+.view { gap:24px; padding:32px; }
+.card,.kpi { border-radius:var(--r-card); box-shadow:var(--sh-1); }
+.card { padding:24px; }
+.card-h { flex-wrap:wrap; font-size:17px; line-height:1.45; margin-bottom:16px; }
+.page-heading { padding:30px 32px; border:1px solid var(--border-1); border-radius:24px; background:var(--surface-1); box-shadow:var(--sh-1); align-items:center; }
+.page-heading h1,.view[data-view="home"] .page-heading h1 { font-size:clamp(30px,3vw,42px); line-height:1.16; letter-spacing:-.035em; }
+.page-heading p,.view[data-view="home"] .page-heading p { display:block; overflow:visible; -webkit-line-clamp:unset; font-size:16px; line-height:1.55; margin-top:10px; }
+.eyebrow { font-size:12px; font-weight:800; }
+.heading-actions { flex-wrap:wrap; }
+.pausebar { padding:20px 24px; border-inline-start:4px solid var(--accent); }
+.kpi-grid,.kpis.kpi-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.kpi { padding:22px; min-height:142px; }
+.k-l { font-size:14px; line-height:1.4; }
+.k-v { font-size:36px; line-height:1.2; }
+.k-s { font-size:13px; line-height:1.4; }
+.home-grid { grid-template-columns:minmax(0,1.5fr) minmax(290px,1fr); gap:20px; }
+.home-col { gap:20px; }
+.ph-l h2 { font-size:30px; line-height:1.2; }
+.ph-d { font-size:15px; line-height:1.5; }
+.btn,.radio-pill { min-height:44px; height:auto; }
+.vtab-row,.radio-line { flex-wrap:wrap; }
+
+/* Studio: editorial, warm and deliberately restrained. */
+html[data-design="studio"] .page-heading { background:linear-gradient(110deg,var(--surface-1) 55%,var(--accent-soft)); }
+html[data-design="studio"] .kpi::before { opacity:.05; }
+html[data-design="studio"] .sb-logo { background:var(--accent); color:var(--accent-ink); }
+
+/* Mission: instruments and precise data, not navy cards. */
+html[data-design="mission"] .content { background-image:linear-gradient(var(--border-1) 1px,transparent 1px),linear-gradient(90deg,var(--border-1) 1px,transparent 1px); background-size:64px 64px; background-position:-1px -1px; }
+html[data-design="mission"] .sidebar { border-inline-end:1px solid var(--border-2); }
+html[data-design="mission"] .page-heading { border-radius:8px; border-inline-start:4px solid var(--accent); box-shadow:inset 0 1px 0 var(--accent-soft),var(--sh-1); }
+html[data-design="mission"] .card,html[data-design="mission"] .kpi { border-radius:8px; }
+html[data-design="mission"] .k-v,html[data-design="mission"] .num { font-family:var(--mono); letter-spacing:-.04em; }
+html[data-design="mission"] .eyebrow,html[data-design="mission"] .sb-group { font-family:var(--mono); letter-spacing:.06em; }
+html[data-design="mission"] .sb-logo { border-radius:6px; background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent); }
+html[data-design="mission"][data-theme="dark"] .card,html[data-design="mission"][data-theme="dark"] .kpi { box-shadow:inset 0 1px rgba(170,255,232,.04),var(--sh-1); }
+
+/* Broadcast: a confident, multi-colour media console. */
+html[data-design="broadcast"] { --r-card:24px; }
+html[data-design="broadcast"] .sidebar { border-inline-end:0; box-shadow:4px 0 30px rgba(35,20,50,.06); }
+html[data-design="broadcast"] .page-heading { border-radius:30px; background:var(--accent-soft); border-color:transparent; }
+html[data-design="broadcast"] .page-heading h1 { font-weight:800; letter-spacing:-.045em; }
+html[data-design="broadcast"] .kpi { border-radius:25px; border:0; background:var(--surface-1); box-shadow:var(--sh-1); }
+html[data-design="broadcast"] .kpi::before { opacity:.16; }
+html[data-design="broadcast"] .sb-logo { border-radius:50%; background:var(--accent); color:var(--accent-ink); }
+html[data-design="broadcast"] .sb-item.on { border-radius:999px; color:var(--text-1); }
+html[data-design="broadcast"] .btn { border-radius:999px; }
+html[data-design="broadcast"] .sb-acc:nth-child(1) .sb-group { color:var(--success-text); }
+html[data-design="broadcast"] .sb-acc:nth-child(2) .sb-group { color:var(--warning-text); }
+html[data-design="broadcast"] .sb-acc:nth-child(3) .sb-group { color:var(--info-text); }
+html[data-design="broadcast"] .sb-acc:nth-child(4) .sb-group { color:var(--violet); }
+
+/* Appearance chooser is a first-class component, not a hidden skin toggle. */
+.appearance-settings { margin-top:24px; padding-top:24px; border-top:1px solid var(--border-1); }
+.appearance-heading { display:flex; flex-wrap:wrap; gap:6px 16px; align-items:baseline; }
+.appearance-heading strong { font-size:19px; }
+.appearance-heading span { color:var(--text-2); }
+.appearance-label { font-weight:700; margin:20px 0 10px; }
+.design-choices { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr)); gap:12px; }
+.design-choice { display:flex; flex-direction:column; align-items:flex-start; gap:5px; text-align:start; padding:14px; border:2px solid var(--border-1); border-radius:16px; background:var(--surface-1); min-width:0; }
+.design-choice:hover { border-color:var(--border-2); }
+.design-choice.selected { border-color:var(--accent); background:var(--accent-soft); }
+.design-choice small { color:var(--text-2); font-size:13px; line-height:1.4; }
+.design-swatch { width:100%; height:54px; display:block; border-radius:9px; margin-bottom:6px; }
+.studio-swatch { background:linear-gradient(90deg,#174c3c 0 18%,#f9f9f2 18% 100%); border:1px solid #d5e3da; }
+.mission-swatch { background:linear-gradient(90deg,#091310 0 18%,#172625 18% 100%); border:1px solid #32554c; }
+.broadcast-swatch { background:linear-gradient(110deg,#fbbf57 0 25%,#8463db 25% 50%,#4c92eb 50% 75%,#59c89a 75%); }
+#themeRadios .radio-pill.selected { border-color:var(--accent); background:var(--accent-soft); color:var(--text-1); }
+@media (max-width:1100px) { .home-grid { grid-template-columns:1fr; } }
+@media (max-width:767px) {
+  .topbar { padding-inline:12px; }
+  .design-switch { min-width:44px; padding:0 10px; }
+  .design-switch #designQuickLabel { display:none; }
+  .view { padding:20px 16px 32px; gap:18px; }
+  .page-heading { padding:24px 20px; }
+  .page-heading h1,.view[data-view="home"] .page-heading h1 { font-size:30px; line-height:1.2; }
+  .view[data-view="home"] .page-heading p,.page-heading #homeSub { display:block; overflow:visible; -webkit-line-clamp:unset; }
+  .card,.set-body .card,.view[data-view="posts"] .card,.view[data-view="media"] .card,.view[data-view="newpost"] .card,.view[data-view="routing"] .card,.view[data-view="analytics"] .card,.view[data-view="aireply"] .card { padding:20px; }
+  .card-h { font-size:16px; line-height:1.45; }
+  .kpi-grid,.kpis.kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .kpi { padding:18px; min-height:130px; }
+  .ph-l h2 { font-size:28px; }
+}
+@media (max-width:390px) {
+  .kpi-grid,.kpis.kpi-grid { grid-template-columns:1fr; }
+  .heading-actions { width:100%; }
+}
+/* Replace the former short-screen compression: content scrolls instead of shrinking. */
+.view[data-view="home"] { padding:32px; gap:24px; }
+.view[data-view="home"] #kpiGrid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
+.view[data-view="home"] #kpiGrid .kpi { min-height:142px; padding:22px; gap:6px; }
+.view[data-view="home"] .k-v { font-size:36px; line-height:1.2; }
+.view[data-view="home"] .k-l { font-size:14px; line-height:1.4; }
+.view[data-view="home"] .k-s { font-size:13px; line-height:1.4; }
+.view[data-view="home"] .pb-t span { display:block; overflow:visible; -webkit-line-clamp:unset; }
+.view[data-view="home"] #homeQueue,.view[data-view="home"] #homeHealth,.view[data-view="home"] #homePace { max-height:none; overflow:visible; }
+.view[data-view="home"] #activityFeed .tl-i:nth-child(n) { display:flex; }
+.view[data-view="home"] #homeChartFoot { display:block; }
+.view[data-view="home"] .home-chart-svg { height:180px; }
+.view[data-view="analytics"] .kpis .kpi,.view[data-view="health"] .kpis .kpi { min-height:120px; padding:20px; }
+.view[data-view="analytics"] #anMedia .k-s { display:block; overflow:visible; -webkit-line-clamp:unset; }
+.view .vtab-row { display:flex; flex-wrap:wrap; }
+@media (min-width:768px) and (max-width:1500px) { .topbar .command-search { display:none; } }
+@media (min-width:768px) and (max-width:1100px) {
+  .view[data-view="home"] #kpiGrid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media (max-width:767px) {
+  .view[data-view="home"] { padding:20px 16px 32px; gap:18px; }
+  .view[data-view="home"] #kpiGrid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .view[data-view="home"] #kpiGrid .kpi { min-height:130px; padding:18px; }
+  .view[data-view="home"] .k-v { font-size:30px; line-height:1.2; }
+  .view[data-view="home"] .live-badge { display:inline-flex; }
+}
+@media (max-width:390px) { .view[data-view="home"] #kpiGrid { grid-template-columns:1fr; } }
+/* Stronger visual hierarchy: the desk begins with the greeting, then status. */
+.view[data-view="home"] > .page-heading { order:-1; }
+.view[data-view="home"] .page-heading #homeSub { display:block; font-size:16px; line-height:1.5; overflow:visible; -webkit-line-clamp:unset; }
+#themeBtn svg { width:20px; height:20px; }
+/* Broadcast uses a multicolour collection, rather than a recoloured Studio. */
+html[data-design="broadcast"][data-theme="light"] .view[data-view="home"] .kpi:nth-child(6n+1) { background:#fce5d7; }
+html[data-design="broadcast"][data-theme="light"] .view[data-view="home"] .kpi:nth-child(6n+2) { background:#d9f1e4; }
+html[data-design="broadcast"][data-theme="light"] .view[data-view="home"] .kpi:nth-child(6n+3) { background:#e8e1fa; }
+html[data-design="broadcast"][data-theme="light"] .view[data-view="home"] .kpi:nth-child(6n+4) { background:#dfefff; }
+html[data-design="broadcast"][data-theme="light"] .view[data-view="home"] .kpi:nth-child(6n+5) { background:#fff0ce; }
+html[data-design="broadcast"][data-theme="light"] .view[data-view="home"] .kpi:nth-child(6n+6) { background:#f9e4ee; }
+html[data-design="broadcast"][data-theme="dark"] .view[data-view="home"] .kpi:nth-child(6n+1) { background:#49302b; }
+html[data-design="broadcast"][data-theme="dark"] .view[data-view="home"] .kpi:nth-child(6n+2) { background:#203e35; }
+html[data-design="broadcast"][data-theme="dark"] .view[data-view="home"] .kpi:nth-child(6n+3) { background:#3e3152; }
+html[data-design="broadcast"][data-theme="dark"] .view[data-view="home"] .kpi:nth-child(6n+4) { background:#233a50; }
+html[data-design="broadcast"][data-theme="dark"] .view[data-view="home"] .kpi:nth-child(6n+5) { background:#483c28; }
+html[data-design="broadcast"][data-theme="dark"] .view[data-view="home"] .kpi:nth-child(6n+6) { background:#493040; }
+
+/* Phone navigation keeps readable labels and comfortable touch targets. */
+@media (max-width:767px) {
+  .kpi { background:var(--surface-1); }
+  .btabs { height:72px; }
+  .bt { font-size:13px; line-height:1.2; min-height:52px; }
+  .bt span { line-height:1.2; }
+  .content { padding-bottom:96px; }
+  .rfab { bottom:84px; }
+}
+
+/* Full-size editor, headings and navigation; wrap instead of compressing. */
+.view .ph h2 { font-size:30px; line-height:1.2; }
+.view .ph-d { display:block; overflow:visible; -webkit-line-clamp:unset; font-size:15px; line-height:1.5; }
+.view[data-view="newpost"] #composeText { height:168px; min-height:120px; }
+.view[data-view="analytics"] .bar-label { font-size:12px; line-height:1.3; white-space:normal; }
+.view[data-view="analytics"] .kpi { min-height:120px; padding:20px; }
+@media(max-width:767px) { .view .ph h2 { font-size:28px; } }
+
+/* Operations brief: live, actionable status, arranged to wrap instead of shrink. */
+.ops-brief { padding:26px; border:1px solid var(--border-1); border-radius:var(--r-card); background:var(--surface-1); box-shadow:var(--sh-1); }
+.ops-brief-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.ops-brief-head h2 { font-size:24px; line-height:1.25; letter-spacing:-.025em; }
+.ops-brief-head p { margin-top:6px; font-size:15px; line-height:1.5; color:var(--text-2); }
+.ops-brief-items { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr)); gap:12px; }
+.ops-item { background:var(--surface-2); border:1px solid var(--border-1); border-radius:15px; padding:16px; min-width:0; display:flex; flex-direction:column; gap:8px; }
+.ops-item-top { display:flex; align-items:center; gap:8px; color:var(--text-2); font-size:14px; font-weight:700; }
+.ops-dot { width:9px; height:9px; flex:none; border-radius:50%; }
+.ops-dot.is-ok { background:var(--success); } .ops-dot.is-attention { background:var(--warning); }
+.ops-item strong { font-size:17px; line-height:1.3; overflow-wrap:anywhere; }
+.ops-item p { color:var(--text-2); font-size:14px; line-height:1.45; }
+.ops-link { align-self:flex-start; color:var(--accent); font-weight:700; margin-top:auto; min-height:40px; text-align:start; }
+.ops-link:hover { text-decoration:underline; }
+.ops-brief-loading { color:var(--text-2); }
+html[data-design="mission"] .ops-brief,html[data-design="mission"] .ops-item { border-radius:8px; }
+html[data-design="broadcast"] .ops-brief { border-radius:28px; }
+@media(max-width:767px) { .ops-brief { padding:20px; } .ops-brief-items { grid-template-columns:1fr; } }
+
+.live-badge.needs-attention { background:var(--warning-soft); color:var(--warning-text); }
+.live-badge.needs-attention i { background:var(--warning); }

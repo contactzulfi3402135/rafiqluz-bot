@@ -281,6 +281,7 @@ const inFlight = new Set(); // same message can arrive via message-receive AND m
 
 async function intake(m) {
   try {
+    if (require('./lifecycle').isStopping()) return;
     if (S.getBool('mirror.paused', false)) return;  // global pause — nothing is marked, so unpause + recovery resumes flow
     if (S.getBool('panic.on', false)) return;       // 5E (R73): panic stop — same resume-on-restore guarantee
     const jid = String(m.key?.remoteJid || '');
@@ -684,18 +685,20 @@ async function processOne(m, src, jid, id) {
     // 5J (J7) — AI safety screen (OFF by default, R8): an AI criteria review of the
     // FINAL text before it is routed (e.g. "no political content, no ban-risk words").
     // Fail-OPEN like every other AI step — the AI being down never loses a post.
+    let safetyReview = false;
     if (on('aisafety')) {
       const crit = String(S.get('power.aisafety.criteria', '')).trim();
       if (crit && final.trim()) {
         try {
           const verdict = await ai.matches(final, crit);
+          if (verdict == null && S.get('power.aisafety.unavailable', 'open') === 'review') safetyReview = true;
           if (verdict === false) {
             P.mark(jid, id, 'skipped', 'AI safety: flagged by the safety screen');
             ring.warn('post.skip.aisafety', `Post held by the AI safety screen (${src.name || jid}) — adjust the criteria in AI Pilot → Safety`);
             return;
           }
-        } catch { /* fail-open: AI unavailable → publish as usual */ }
-      }
+        } catch { if (S.get('power.aisafety.unavailable', 'open') === 'review') safetyReview = true; }
+      } else if (S.get('power.aisafety.unavailable', 'open') === 'review') safetyReview = true;
     }
 
     // publish to every allowed target:
@@ -741,8 +744,8 @@ async function processOne(m, src, jid, id) {
     // global delay buffer. The composed final text + media are held, then the
     // queue publishes them through the SAME publisher (verification intact).
     const delayMin = Math.max(0, Math.min(1440, parseInt(S.get('queue.delay.min', '0'), 10) || 0));
-    if (on('queue') && (rule.approve_first || delayMin > 0)) {
-      queue5a.enqueue({ sourceJid: jid, sourceMsgId: id, text: final, mediaBuf, mediaKind, mediaMime, msgTs: m.messageTimestamp || 0, targetJids: targets.map((t) => t.jid) });
+    if (safetyReview || (on('queue') && (rule.approve_first || delayMin > 0))) {
+      queue5a.enqueue({ sourceJid: jid, sourceMsgId: id, text: final, mediaBuf, mediaKind, mediaMime, msgTs: m.messageTimestamp || 0, targetJids: targets.map((t) => t.jid), requireApproval: Boolean(rule.approve_first || safetyReview) });
       try { require('./webhooks').fire('post.queued', { source: src.name || jid, approveFirst: !!rule.approve_first, delayMin }); } catch { } // 5G (R80)
       return;
     }
@@ -775,7 +778,7 @@ async function processOne(m, src, jid, id) {
         } catch { }
       }
     }
-    if (result.sent > 0) {
+    if (result.complete) {
       const lagSec = m.messageTimestamp ? Math.max(0, Math.round(Date.now() / 1000 - m.messageTimestamp)) : null;
       /* v9.0.0 (owner policy): the media is now in the target channel — delete
          the local copy (any size; nothing kept after posting). Text stays. */
@@ -851,7 +854,7 @@ function inspectText(text, { sourceJid = '', hasMedia = false } = {}) {
   }
   if (on('aisafety')) {
     const c = String(S.get('power.aisafety.criteria', '')).trim();
-    stages.push({ name: 'AI safety screen', before: t, after: t, changed: false, note: c ? `ON — final text must match “${c.slice(0, 60)}” (checked at publish, fail-open)` : 'ON — no criteria set, passes everything' });
+    stages.push({ name: 'AI safety screen', before: t, after: t, changed: false, note: c ? `ON — final text must match “${c.slice(0, 60)}” (checked at publish; unavailable: ${S.get("power.aisafety.unavailable", "open") === "review" ? "hold for review" : "continue"})` : 'ON — no criteria set, passes everything' });
   }
 
   const applied = templates.apply(t, { sourceName: srcName, dryRun: true });

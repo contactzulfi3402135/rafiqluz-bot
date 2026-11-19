@@ -12,35 +12,41 @@ const { ring } = require('./logger');
 const { WAS, AUD, NTF } = db;
 
 /** Send every due item for the session. Safe to call from a timer. */
+const running = new Set();
 async function tick(session = 'main') {
-  if (require('./panic').active()) return; // 5E (R73): panic stop freezes scheduled sends
-  const sock = wa.getSocket();
-  if (!sock || wa.getStatus().status !== 'open') return; // link not ready — items wait, nothing is lost
-  const due = WAS.due(Date.now(), session);
-  for (const row of due) {
-    try {
-      const name = String((row.name || '') || '').slice(0, 60);
-      const text = String(row.text || '').slice(0, 4096);
+  if (running.has(session) || require('./lifecycle').isStopping() || require('./panic').active()) return;
+  const sock = require('./numbers').getSocket(session);
+  if (!sock || require('./numbers').statusOf(session) !== 'open') return;
+  running.add(session);
+  try {
+    for (const row of WAS.due(Date.now(),session)) {
+      const text = String(row.text || '').slice(0,4096);
       if (!text) continue;
-      await sock.sendMessage(row.jid, { text });
-      const nowIso = new Date().toISOString();
-      WAS.markSent(row.id, nowIso);
-      const next = nextRun(row);
-      if (row.repeat === 'once' || !next) {
-        WAS.setEnabled(row.id, false);
-      } else {
-        db.open().prepare('UPDATE wa_scheduled SET at=? WHERE id=?').run(next, row.id);
+      const ledger = require('./delivery-ledger');
+      const source = `wasched:${session}`;
+      const occurrence = `${row.id}:${row.at}`;
+      const digest = require('crypto').createHash('sha256').update(JSON.stringify({jid:row.jid,text})).digest('hex');
+      const claim = ledger.claim(source,occurrence,row.jid,0,digest);
+      if (!claim.claimed && claim.state !== 'accepted') continue;
+      if (claim.claimed) {
+        try {
+          const result = await sock.sendMessage(row.jid,{text});
+          ledger.finish(source,occurrence,row.jid,0,'accepted',result?.key?.id || '', 'Provider accepted; delivery not confirmed');
+        } catch (err) {
+          ledger.finish(source,occurrence,row.jid,0,'uncertain','',String(err.message || err));
+          ring.warn('wasched.uncertain',`Scheduled send outcome unknown; review before retry: ${String(err.message || err).slice(0,100)}`);
+          continue;
+        }
       }
-      try { AUD.log('queue', 'wasched.sent', `Scheduled send delivered (${row.repeat}) to ${name || row.jid} — ${text.slice(0, 80)}`); } catch { }
-      ring.info('wasched.sent', `Scheduled send delivered to ${name || row.jid} (${row.repeat})`);
-      try { require('./webhooks').fire('wasched.sent', { to: name || row.jid, repeat: row.repeat, text: text.slice(0, 120) }); } catch { } // 5G (R80)
-    } catch (err) {
-      // not connected / contact not on WhatsApp / transient: retry gently (1 min), never lost
-      const retry = new Date(Date.now() + 60e3).toISOString();
-      db.open().prepare('UPDATE wa_scheduled SET at=? WHERE id=?').run(retry, row.id);
-      ring.warn('wasched.fail', `Scheduled send to ${row.jid} failed — retrying in 1 min: ${String(err?.message || err).slice(0, 120)}`);
+      const current = WAS.get(row.id);
+      if (!current || current.at !== row.at) continue;
+      const next = nextRun(row);
+      db.open().prepare('UPDATE wa_scheduled SET sent=sent+1,last_sent=?,at=?,enabled=? WHERE id=? AND at=?').run(new Date().toISOString(),next || row.at,next ? current.enabled : 0,row.id,row.at);
+      AUD.log('queue','wasched.sent',`Scheduled send accepted by provider (${row.repeat}) to ${row.jid}; delivery not confirmed`);
+      ring.info('wasched.sent',`Scheduled send accepted by provider to ${row.jid}`);
+      try { require('./webhooks').fire('wasched.sent',{to:row.name || row.jid,repeat:row.repeat,text:text.slice(0,120)}); } catch {}
     }
-  }
+  } finally { running.delete(session); }
 }
 
 /** Start the 30-second tick (called from index.js boot, like the other engines). */

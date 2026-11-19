@@ -88,7 +88,7 @@ const TOOLS = [
   },
   {
     name: 'post_text',
-    desc: 'Publish a new custom TEXT post to the target channel(s) right now (exactly the text given — not beautified)',
+    desc: 'Create a text draft for human approval in the queue; it is not sent immediately',
     args: 'text (string, the post), target (optional: one channel name to publish only there)',
     run: async (a) => {
       const text = String(a.text || '').trim();
@@ -102,11 +102,8 @@ const TOOLS = [
         if (!hit) throw new Error(`Target "${a.target}" not found. Active targets: ${targets.map((x) => x.name || x.jid).join(', ')}`);
         targets = [hit];
       }
-      const sock = wa.getSocket();
-      if (!sock || wa.getStatus().status !== 'open') throw new Error('WhatsApp is not connected.');
-      const result = await publishMod.publish({ text }, { only: targets.map((t) => t.jid), hasMedia: false });
-      if (!result.sent) throw new Error('Publish failed: ' + (result.errors.join(' | ') || 'unknown error'));
-      return { sent: result.sent, to: targets.map((t) => t.name || t.jid), errors: result.errors };
+      const id = require('./queue5a').enqueue({ sourceJid:'ai-draft@bot', sourceMsgId:require('crypto').randomUUID(), text, targetJids:targets.map(t => t.jid), requireApproval:true });
+      return { queued:true, id, note:'Draft queued for human review. It has not been published.' };
     }
   },
   {

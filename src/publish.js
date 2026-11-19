@@ -18,72 +18,92 @@ function perTargetMax(jid) {
 
 /** Publish content to every active target. Returns {sent, failed, errors, keys}. */
 async function publish(content, meta = {}) {
-  const only = Array.isArray(meta.only) ? meta.only : null;
+  if (require('./lifecycle').isStopping()) return {sent:0,failed:1,errors:['Shutdown in progress; no new send started'],keys:[],complete:false};
+  const crypto = require('crypto');
+  const ledger = require('./delivery-ledger');
+  const only = Array.isArray(meta.only) ? [...new Set(meta.only)] : null;
   const targets = CH.listActiveTargets().filter((t) => !only || only.includes(t.jid));
-  if (targets.length === 0) {
-    ring.warn('publish.no.targets', 'No target channels configured — post skipped');
-    return { sent: 0, failed: 0, errors: ['no target'], keys: [] };
-  }
+  const errors = []; const keys = [];
+  const missing = only ? only.filter((jid) => !targets.some(t => t.jid === jid)) : [];
+  for (const jid of missing) errors.push(`${jid}: target is missing or paused`);
+  if (!targets.length) return { sent: 0, failed: Math.max(1,errors.length), errors: errors.length ? errors : ['no active target'], keys };
   const sock = wa.getSocket();
-  if (!sock || wa.getStatus().status !== 'open') return { sent: 0, failed: targets.length, errors: ['WhatsApp is not connected'], keys: [] };
+  if (!sock || wa.getStatus().status !== 'open') return { sent: 0, failed: targets.length + missing.length, errors: [...errors, 'WhatsApp is not connected'], keys };
 
-  const keys = [];
-  const errors = [];
-  let sent = 0;
-  let postId = null;
-  /* 5B (R53): the full text, so history can copy/reuse/edit-republish it later */
-  const bodyText = (() => {
-    if (Array.isArray(content.parts) && content.parts.length) return content.parts.map((p) => String(p.text || '')).join('\n').slice(0, 60000);
-    return String((content && (content.text != null ? content.text : content.caption)) || '').slice(0, 60000);
-  })();
-  if (meta.sourceJid && meta.sourceMsgId) {
-    P.mark(meta.sourceJid, meta.sourceMsgId, 'published', String(meta.norm || '').slice(0, 400), bodyText, Boolean(meta.hasMedia));
-    postId = P.postId(meta.sourceJid, meta.sourceMsgId);
-    if (postId) P.setMedia(postId, Boolean(meta.hasMedia)); // 5D (R61): media-vs-text
-  }
-  // 5A (R41): numbered parts — each part is its own publish pass over all
-  // targets (extra pacing between parts), so WhatsApp never sees >4096 chars.
   const parts = Array.isArray(content.parts) && content.parts.length ? content.parts : [content];
+  const bodyText = parts.map(p => String(p.text != null ? p.text : p.caption || '')).join('\n').slice(0,60000);
+  const tracked = Boolean(meta.sourceJid && meta.sourceMsgId);
+  const source = meta.deliverySource || meta.sourceJid;
+  const message = meta.deliveryMessage || meta.sourceMsgId;
+  let postId = null;
+  if (tracked) {
+    P.mark(meta.sourceJid, meta.sourceMsgId, 'processing', 'Publishing in progress', bodyText, Boolean(meta.hasMedia));
+    postId = P.postId(meta.sourceJid, meta.sourceMsgId);
+    if (!postId) throw new Error('Cannot record publish attempt; no messages sent.');
+    P.setStatus(postId, 'processing', 'Publishing in progress', bodyText);
+    P.setMedia(postId, Boolean(meta.hasMedia));
+  }
+  let sent = 0;
+  const blocked = new Set();
   for (let pi = 0; pi < parts.length; pi++) {
     const c = parts[pi];
-    const partHasMedia = Boolean(meta.hasMedia) && pi === 0; // media rides part 1 only
+    // Hash text and bytes as well as metadata: a changed split must never silently reuse a receipt.
+    const h = crypto.createHash('sha256');
+    const emit = v => { const x=String(v); h.update(String(Buffer.byteLength(x))+':'+x); };
+    const hashValue = (v) => {
+      if (Buffer.isBuffer(v)) { emit('buffer'); emit(v.length); h.update(v); }
+      else if (Array.isArray(v)) { emit('array'); emit(v.length); for (const x of v) hashValue(x); }
+      else if (v && typeof v === 'object') { const keys=Object.keys(v).sort(); emit('object'); emit(keys.length); for (const k of keys) { emit(k); hashValue(v[k]); } }
+      else { emit(typeof v); emit(JSON.stringify(v) ?? 'undefined'); }
+    };
+    hashValue(c); const digest = h.digest('hex');
     for (const t of targets) {
-      // 5F (R79): per-target rate cap — skips ONLY this target; other targets still get the post.
+      if (blocked.has(t.jid)) continue;
       const perMax = perTargetMax(t.jid);
-      if (perMax && CH.pubCountLastHour(t.jid) >= perMax) {
-        errors.push(`${t.name || t.jid}: per-target cap (${perMax}/h) reached — this target skipped, others unaffected`);
-        ring.warn('publish.ratelimit', `Per-target cap hit for ${t.name || t.jid} (${perMax}/h) — skipped this target only`);
-        continue;
-      }
-      try {
-      const msgId = await wa.sendToChannel(sock, t.jid, c);
-      // v6.4: media posts are VERIFIED — WhatsApp can accept a media send and
-      // still not show it. We re-read the channel; if our post is not visible,
-      // that is an honest failure, never a silent loss.
-      if (partHasMedia) {
-        await new Promise((r) => setTimeout(r, 1500));
-        const visible = await wa.verifyChannelPost(sock, t.jid, msgId);
-        if (visible === false) {
-          throw new Error('WhatsApp accepted the send but the post is not visible in the channel (media refused) — NOT counted as sent');
+      if (perMax && !(tracked && ledger.get(source,message,t.jid,pi)) && CH.pubCountLastHour(t.jid) >= perMax) { errors.push(`${t.name || t.jid}: target rate cap reached`); blocked.add(t.jid); continue; }
+      let claim = null;
+      if (tracked) {
+        claim = ledger.claim(source,message,t.jid,pi,digest);
+        if (!claim.claimed) {
+          if (claim.state === 'accepted') { sent++; if (claim.row.provider_id) { keys.push({ target:t.jid, msgId:claim.row.provider_id }); if (postId && !P.keys(postId).some(k => k.target_jid === t.jid && k.msg_id === claim.row.provider_id)) P.addKey(postId,t.jid,claim.row.provider_id); } continue; }
+          errors.push(`${t.name || t.jid} part ${pi+1}: ${claim.state === 'changed' ? 'content changed since the previous attempt; manual review needed' : 'outcome needs manual review before retry'}`);
+          blocked.add(t.jid); continue;
         }
-        if (visible === null) ring.warn('publish.unverified', `Could not re-read ${t.name || t.jid} to verify the media post — counted as sent, verify on your phone`);
       }
-      keys.push({ target: t.jid, msgId });
-      if (postId) P.addKey(postId, t.jid, msgId);
-      sent += 1;
-      CH.recordPub(t.jid); // 5F (R79): per-target ledger for the rate caps
-      ring.info('publish.sent', `Published to ${t.name || t.jid}${meta.hasMedia ? ' (media verified)' : ''}`);
+      let providerId = '';
+      try {
+        const msgId = await wa.sendToChannel(sock,t.jid,c);
+        providerId = msgId;
+        // Save the returned provider ID before attempting optional read-back.
+        if (tracked) ledger.finish(source,message,t.jid,pi,'accepted',msgId,'Provider returned a message ID; delivery is not guaranteed');
+        keys.push({target:t.jid,msgId});
+        if (postId && msgId && !P.keys(postId).some(k => k.target_jid === t.jid && k.msg_id === msgId)) P.addKey(postId,t.jid,msgId);
+        CH.recordPub(t.jid);
+        if (Boolean(meta.hasMedia) && pi === 0) {
+          await new Promise(r => setTimeout(r,1500));
+          let visible = null;
+          try { visible = await wa.verifyChannelPost(sock,t.jid,msgId); } catch { /* no proof */ }
+          if (visible !== true) {
+            if (tracked) ledger.finish(source,message,t.jid,pi,'unverified',msgId,visible === false ? 'Not visible on read-back' : 'Read-back unavailable');
+            errors.push(`${t.name || t.jid}: accepted media could not be verified; review before retry`); blocked.add(t.jid); continue;
+          }
+        }
+        sent++;
+        ring.info('publish.sent', `Provider accepted part ${pi+1} for ${t.name || t.jid}`);
       } catch (err) {
-      errors.push(`${t.name || t.jid}: ${err.message}`);
-      ring.warn('publish.fail', `Publish to ${t.name || t.jid} failed: ${err.message}`);
+        // An exception does not prove the remote service did not accept the message.
+        if (tracked) ledger.finish(source,message,t.jid,pi,'uncertain',providerId,String(err.message || err));
+        errors.push(`${t.name || t.jid}: outcome uncertain — ${String(err.message || err).slice(0,160)}`);
+        blocked.add(t.jid);
+        ring.warn('publish.fail', errors[errors.length-1]);
+      }
+      await new Promise(r => setTimeout(r,pace.gapMin(1500)));
     }
-    await new Promise((r) => setTimeout(r, pace.gapMin(1500))); // pacing (5E: adaptive)
-    }
-    if (pi < parts.length - 1) await new Promise((r) => setTimeout(r, pace.gapMin(2000))); // extra pacing between parts
+    if (pi < parts.length-1) await new Promise(r => setTimeout(r,pace.gapMin(2000)));
   }
-  if (postId && errors.length && !sent) P.setStatus(postId, 'failed', errors.join(' | ').slice(0, 200), bodyText);
-  pace.note(sent, errors.length); // 5E (R74): feed the adaptive-pacing window
-  return { sent, failed: errors.length, errors, keys };
+  if (postId) P.setStatus(postId, errors.length ? 'failed' : 'published', errors.length ? errors.join(' | ').slice(0,200) : `Provider accepted ${sent} part(s); delivery not confirmed`, bodyText);
+  pace.note(sent, errors.length);
+  return {sent, failed:errors.length, errors, keys, complete:errors.length === 0};
 }
 
 /** Edit an already-published post's text on every target it went to. */

@@ -18,10 +18,12 @@ let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  ring.warn('bot.shutdown', `${signal} received — closing WhatsApp cleanly so the login stays valid`);
-  try { await require('./persist').flush('deploy-shutdown', 12000); } catch { }   // v7.2: last-second save → no QR after deploy
+  require('./lifecycle').begin();
+  ring.warn('bot.shutdown', `${signal} received — stopping new sends, closing links, then attempting a final snapshot`);
   try { await require('./numbers').stopAll(); } catch { }
   try { await require('./wa').close(); } catch { }
+  // Best effort only: the dyno can be killed or the remote snapshot can fail.
+  try { await require('./persist').flush('deploy-shutdown', 12000); } catch { }
   try { require('./db').open().close(); } catch { }
   process.exit(0);
 }

@@ -44,6 +44,13 @@ CREATE TABLE IF NOT EXISTS post_keys(
   post_id INTEGER, target_jid TEXT, msg_id TEXT, at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_keys_post ON post_keys(post_id);
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, source_jid TEXT NOT NULL, source_msg_id TEXT NOT NULL,
+  target_jid TEXT NOT NULL, part INTEGER NOT NULL, digest TEXT NOT NULL, state TEXT NOT NULL,
+  provider_id TEXT DEFAULT '', detail TEXT DEFAULT '', updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(source_jid,source_msg_id,target_jid,part)
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_review ON delivery_attempts(state,updated_at);
 CREATE TABLE IF NOT EXISTS logs(ts TEXT, level TEXT, code TEXT, msg TEXT, extra TEXT);
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts);
 /* ── v7: inbox is per-number (session) ─────────────────────────────── */
@@ -881,7 +888,7 @@ const Q = {
   setStatus: (id, status, note) => open().prepare("UPDATE approvals SET status=?, note=?, decided_at=CASE WHEN ? IN ('approved','rejected') THEN datetime('now') ELSE decided_at END WHERE id=?").run(status, String(note || '').slice(0, 300), status, Number(id)),
   edit: (id, text) => open().prepare('UPDATE approvals SET text=? WHERE id=?').run(String(text || '').slice(0, 20000), Number(id)),
   count: (status) => { try { return open().prepare('SELECT COUNT(*) n FROM approvals WHERE status=?').get(status).n; } catch { return 0; } },
-  trimOld: (days = 7) => { try { open().prepare(`DELETE FROM approvals WHERE status IN ('published','rejected','failed') AND decided_at < datetime('now', ?)`).run(`-${days} days`); } catch { } }
+  trimOld: (days = 7) => { try { open().prepare(`DELETE FROM approvals WHERE status IN ('published','rejected') AND decided_at < datetime('now', ?)`).run(`-${days} days`); } catch { } }
 };
 
 /* ---- 5A: per-source rule cards ---- */

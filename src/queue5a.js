@@ -30,8 +30,9 @@ function storeMedia(id, buf, kind) {
     return p;
   } catch (e) { ring.warn('queue.media.fail', `Could not hold media for queue item ${id}: ${e.message}`); return ''; }
 }
-function readMedia(p) { try { return p && fs.existsSync(p) ? fs.readFileSync(p) : null; } catch { return null; } }
-function delMedia(p) { try { if (p && fs.existsSync(p)) fs.unlinkSync(p); } catch { } }
+function localMediaPath(p) { const name = path.basename(String(p || '')); return /^\d+\.(jpg|mp4|bin)$/.test(name) ? path.join(HOLD_DIR,name) : ''; }
+function readMedia(p) { try { const f=localMediaPath(p); return f && fs.existsSync(f) ? fs.readFileSync(f) : null; } catch { return null; } }
+function delMedia(p) { try { const f=localMediaPath(p); if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch { } }
 
 /* cleanup: held media for settled items older than 7 days */
 function pruneHold() {
@@ -40,7 +41,10 @@ function pruneHold() {
     const now = Date.now();
     for (const f of fs.readdirSync(HOLD_DIR)) {
       const st = fs.statSync(path.join(HOLD_DIR, f));
-      if (now - st.mtimeMs > 7 * 86400e3) fs.unlinkSync(path.join(HOLD_DIR, f));
+      const full = path.join(HOLD_DIR, f);
+      const itemId = Number(f.split('.')[0]);
+      const ref = require('./db').open().prepare("SELECT 1 FROM approvals WHERE id=? AND status NOT IN ('published','rejected') LIMIT 1").get(itemId);
+      if (!ref && now - st.mtimeMs > 7 * 86400e3) fs.unlinkSync(full);
     }
   } catch { }
 }
@@ -48,12 +52,13 @@ function pruneHold() {
 /** Queue one post (called by the pipeline instead of publishing directly).
     targetJids = the EXACT target set the pipeline computed (mapping + routing +
     matrix), so a held post publishes to the same place it would have. */
-function enqueue({ sourceJid, sourceMsgId, text, mediaBuf, mediaKind, mediaMime, msgTs = 0, targetJids = [] }) {
+function enqueue({ sourceJid, sourceMsgId, text, mediaBuf, mediaKind, mediaMime, msgTs = 0, targetJids = [], requireApproval = false }) {
   const delayMin = Math.max(0, Math.min(1440, parseInt(S.get('queue.delay.min', '0'), 10) || 0));
-  const holdUntil = delayMin > 0 ? new Date(Date.now() + delayMin * 60000).toISOString() : '';
+  const holdUntil = !requireApproval && delayMin > 0 ? new Date(Date.now() + delayMin * 60000).toISOString() : '';
   const id = Q.add({ source_jid: sourceJid, source_msg_id: sourceMsgId, text, media_kind: mediaKind || '', hold_until: holdUntil, msg_ts: msgTs || 0, targets: (targetJids || []).join(',') });
   if (!id) throw new Error('queue insert failed');
   const p = mediaBuf ? storeMedia(id, mediaBuf, mediaKind) : '';
+  if (mediaBuf && !p) { require('./db').open().prepare('DELETE FROM approvals WHERE id=?').run(id); throw new Error('Could not store queued media; no post was sent.'); }
   try { require('./db').open().prepare('UPDATE approvals SET media_path=? WHERE id=?').run(p, id); } catch { }
   P.mark(sourceJid, sourceMsgId, 'queued', 'waiting in approval queue', String(text || '').slice(0, 60000));
   const pid = P.postId(sourceJid, sourceMsgId);
@@ -66,16 +71,19 @@ function enqueue({ sourceJid, sourceMsgId, text, mediaBuf, mediaKind, mediaMime,
 
 /** Re-publish one queued item through the normal publisher. */
 async function release(id) {
+  if (require('./lifecycle').isStopping()) return null;
   const row = Q.one(id);
   if (!row || (row.status !== 'pending' && row.status !== 'approved')) return null;
   const now = Date.now();
   // the hold buffer only gates PENDING items — an explicit owner approval publishes now (cancellable hold)
-  if (row.status === 'pending' && row.hold_until && Date.parse(row.hold_until) > now) return 'held';
-  if (row.status === 'pending') Q.setStatus(id, 'approved', 'auto (delay buffer elapsed)');
+  if (row.status === 'pending' && (!row.hold_until || !Number.isFinite(Date.parse(row.hold_until)) || Date.parse(row.hold_until) > now)) return 'held';
   const d = require('./db').open();
-  d.prepare("UPDATE approvals SET status='processing' WHERE id=?").run(id);
+  if (require('./delivery-ledger').hasLegacyCopies(row.source_jid,row.source_msg_id)) { Q.setStatus(id,'failed','Older recorded copies need manual checking; use republish only after reviewing destinations.'); const pid=P.postId(row.source_jid,row.source_msg_id); if (pid) P.setStatus(pid,'failed','Older recorded copies need manual checking before any resend.'); return 'done'; }
+  const claimed = d.prepare("UPDATE approvals SET status='processing' WHERE id=? AND status=?").run(id, row.status);
+  if (!claimed.changes) return null;
   try {
     const mediaBuf = readMedia(row.media_path);
+    if (row.media_kind && !mediaBuf) throw new Error('Queued media is missing. No text-only substitute was sent; restore the media or discard.');
     const hasMedia = Boolean(mediaBuf) && row.media_kind;
     const content = hasMedia
       ? (row.media_kind === 'video'
@@ -92,7 +100,7 @@ async function release(id) {
       norm: String(row.text || '').slice(0, 400)
     });
     const ms = Date.now() - t0;
-      if (res.sent > 0) {
+      if (res.complete) {
       Q.setStatus(id, 'published', `sent to ${res.sent} target(s)`);
       const pid = P.postId(row.source_jid, row.source_msg_id);
       if (pid) {
@@ -117,6 +125,8 @@ async function release(id) {
     }
   } catch (err) {
     Q.setStatus(id, 'failed', err.message.slice(0, 200));
+    const pid = P.postId(row.source_jid, row.source_msg_id);
+    if (pid) P.setStatus(pid, 'failed', String(err.message).slice(0,200));
     AUD.log('queue', 'post.failed', `Queue item ${id}: ${err.message}`);
   }
   return 'done';
@@ -125,12 +135,12 @@ async function release(id) {
 /** The 15 s pump: release what may run now. */
 let ticking = false;
 async function tick() {
-  if (ticking) return;
+  if (ticking || require('./lifecycle').isStopping()) return;
   ticking = true;
   try {
     if (require('./panic').active()) return; // 5E (R73): panic stop freezes the pump — items stay pending
     for (const row of Q.pending(50)) {
-      if (row.status === 'pending' && row.hold_until && Date.parse(row.hold_until) > Date.now()) continue;
+      if (row.status === 'pending' && (!row.hold_until || !Number.isFinite(Date.parse(row.hold_until)) || Date.parse(row.hold_until) > Date.now())) continue;
       await release(row.id);
       const extra = Math.max(0, require('./pace').gapMin(1500) - 1500); // 5E (R74): adaptive backoff between items
       if (extra) await new Promise((r) => setTimeout(r, extra));
@@ -138,7 +148,18 @@ async function tick() {
     Q.trimOld(7);
   } finally { ticking = false; }
 }
-function start() { setInterval(() => { tick().catch(() => { }); pruneHold(); }, 15000).unref?.(); }
+function start() {
+  // Previous process may have stopped after sending; never auto-replay it.
+  const d = require('./db').open();
+  // Older versions did not distinguish approval drafts from timed holds.
+  d.prepare("UPDATE approvals SET hold_until='' WHERE status='pending' AND (source_jid='plan@bot' OR source_jid IN (SELECT source_jid FROM source_rules WHERE approve_first=1))").run();
+  const stranded = d.prepare("SELECT * FROM approvals WHERE status='processing'").all();
+  for (const row of stranded) {
+    Q.setStatus(row.id, 'failed', 'Interrupted during publishing; review delivery outcomes before retry.');
+    const pid = P.postId(row.source_jid,row.source_msg_id);
+    if (pid) P.setStatus(pid, 'failed', 'Interrupted during publishing; review delivery outcomes before retry.');
+  }
+  setInterval(() => { tick().catch(() => { }); pruneHold(); }, 15000).unref?.(); }
 
 /* ---------- owner actions ---------- */
 function pendingCount() { try { return Q.pending(500).filter((q) => q.status === 'pending').length; } catch { return 0; } }
@@ -148,13 +169,13 @@ function approve(id, note) { const r = Q.one(id); if (!r) throw new Error('Item 
 function reject(id, note) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); if (r.status !== 'pending') throw new Error('Item already decided.'); Q.setStatus(id, 'rejected', note || 'rejected by owner'); AUD.log('owner', 'queue.reject', `Rejected queue item ${id}`); delMedia(r.media_path); const pid = P.postId(r.source_jid, r.source_msg_id); if (pid) P.setStatus(pid, 'skipped', 'rejected in approval queue'); return Q.one(id); }
 function approveAll() { let n = 0; for (const r of Q.pending(200)) { try { if (r.status === 'pending') { Q.setStatus(r.id, 'approved', 'approved all by owner'); n += 1; } } catch { } } if (n) AUD.log('owner', 'queue.approve-all', `Approved ${n} queued posts`); tick().catch(() => { }); return n; }
 function dismiss(id) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); Q.setStatus(id, 'failed', 'dismissed by owner'); const pid = P.postId(r.source_jid, r.source_msg_id); if (pid) { try { require('./db').open().prepare('UPDATE posts SET dismissed=1 WHERE id=?').run(pid); } catch { } } AUD.log('owner', 'queue.dismiss', `Dismissed queue item ${id}`); return Q.one(id); }
-function retry(id) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); if (!['failed', 'processing'].includes(r.status)) throw new Error('Only failed items can be retried.'); require('./db').open().prepare("UPDATE approvals SET status='pending', hold_until='', note='' WHERE id=?").run(id); AUD.log('owner', 'queue.retry', `Retried queue item ${id}`); tick().catch(() => { }); return Q.one(id); }
+function retry(id) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); if (r.status !== 'failed') throw new Error('Only failed items can be retried.'); if (require('./delivery-ledger').hasLegacyCopies(r.source_jid,r.source_msg_id)) throw new Error('Older recorded copies need manual checking; retry is disabled to avoid duplicates.'); if (require('./delivery-ledger').hasUnresolved(r.source_jid,r.source_msg_id)) throw new Error('Review uncertain deliveries first to avoid duplicates.'); require('./db').open().prepare("UPDATE approvals SET status='approved', hold_until='', note='' WHERE id=?").run(id); AUD.log('owner', 'queue.retry', `Retried queue item ${id}`); tick().catch(() => { }); return Q.one(id); }
 
 /* ---------- R43: Live Queue view data ---------- */
 function liveView() {
   const d = require('./db').open();
   const queue = Q.pending(200);
-  const failed = d.prepare("SELECT p.*, (SELECT COUNT(*) FROM approvals a WHERE a.source_jid=p.source_jid AND a.source_msg_id=p.source_msg_id) has_q FROM posts p WHERE p.status='failed' AND p.dismissed=0 ORDER BY p.id DESC LIMIT 100").all();
+  const failed = d.prepare("SELECT p.*, (SELECT MAX(a.id) FROM approvals a WHERE a.source_jid=p.source_jid AND a.source_msg_id=p.source_msg_id AND a.status='failed') queue_id FROM posts p WHERE p.status='failed' AND p.dismissed=0 ORDER BY p.id DESC LIMIT 100").all();
   const queued = d.prepare("SELECT COUNT(*) n FROM posts WHERE status='queued'").get().n;
   const processing = d.prepare("SELECT COUNT(*) n FROM approvals WHERE status='processing'").get().n;
   const reasons = {};
@@ -166,7 +187,7 @@ function liveView() {
     pending: queue.filter((q) => q.status === 'pending').map((q) => ({ ...q, text: String(q.text || '') })),
     approved: queue.filter((q) => q.status === 'approved').map((q) => ({ ...q, text: String(q.text || '') })),
     processing, queued,
-    failed: failed.map((f) => ({ id: f.id, when: f.created_at, source_jid: f.source_jid, source_msg_id: f.source_msg_id, reason: f.reason || '' })),
+    failed: failed.map((f) => ({ id: f.id, when: f.created_at, source_jid: f.source_jid, source_msg_id: f.source_msg_id, queue_id: f.queue_id, reason: f.reason || '' })),
     failedGrouped: Object.fromEntries(Object.entries(reasons).map(([k, v]) => [k, { n: v.length, items: v }])),
     delayMin: Math.max(0, Math.min(1440, parseInt(S.get('queue.delay.min', '0'), 10) || 0)),
     recovery: S.get('recovery.last', ''),
@@ -176,6 +197,9 @@ function liveView() {
 
 /* ---------- R43/R47/R53: retry failed posts (re-feed through the real pipeline) ---------- */
 async function refeedOne(f) {
+  if (String(f.source_jid).startsWith('system:') || String(f.source_jid).endsWith('@bot')) throw new Error('This is not a source-channel post; inspect the destination and deliberately compose again if needed.');
+  if (require('./delivery-ledger').hasLegacyCopies(f.source_jid,f.source_msg_id)) throw new Error('Older recorded copies need manual checking; retry is disabled to avoid duplicates.');
+  if (require('./delivery-ledger').hasUnresolved(f.source_jid,f.source_msg_id)) throw new Error('Review uncertain deliveries first to avoid duplicates.');
   const sock = wa.getSocket();
   if (!sock || wa.getStatus().status !== 'open') throw new Error('WhatsApp is not connected — the post stays in the queue and will be retried on reconnect.');
   const posts = await wa.fetchChannelPosts(sock, f.source_jid, 50).catch(() => []);
@@ -189,6 +213,11 @@ async function refeedOne(f) {
 async function retryOneFailed(postId) {
   const f = require('./db').open().prepare("SELECT id, source_jid, source_msg_id FROM posts WHERE id=? AND status='failed'").get(Number(postId));
   if (!f) throw new Error('Only failed posts can be retried.');
+  const queued = require('./db').open().prepare("SELECT id,status FROM approvals WHERE source_jid=? AND source_msg_id=? ORDER BY id DESC LIMIT 1").get(f.source_jid,f.source_msg_id);
+  if (queued) {
+    if (queued.status !== 'failed') throw new Error('This post has a queue item that is not failed; manage it in the Approval queue.');
+    retry(queued.id); return {ok:true, queued:true};
+  }
   await refeedOne(f);
   AUD.log('owner', 'post.retry', `Retried failed post ${f.id} through the pipeline`);
   ring.info('post.retry', `Failed post ${f.id} re-fed through the pipeline`);
@@ -196,7 +225,7 @@ async function retryOneFailed(postId) {
 }
 async function retryAllFailed() {
   const d = require('./db').open();
-  const failed = d.prepare("SELECT p.id, p.source_jid, p.source_msg_id FROM posts p WHERE p.status='failed' AND p.dismissed=0 ORDER BY p.id ASC LIMIT 100").all();
+  const failed = d.prepare("SELECT p.id, p.source_jid, p.source_msg_id FROM posts p WHERE p.status='failed' AND p.dismissed=0 AND p.source_jid NOT LIKE 'system:%' AND p.source_jid NOT LIKE '%@bot' AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.source_jid=p.source_jid AND a.source_msg_id=p.source_msg_id) ORDER BY p.id ASC LIMIT 100").all();
   let retried = 0; const skipped = [];
   for (const f of failed) {
     try { await refeedOne(f); retried += 1; } catch { skipped.push(f.id); }
@@ -225,6 +254,7 @@ async function republishOne(postId, newText) {
   if (!targets.length) throw new Error('No target is currently allowed for that source (mapping/routing) — nothing was published.');
   const res = await publishMod.publish({ text: text.slice(0, 60000) }, {
     sourceJid: row.source_jid, sourceMsgId: row.source_msg_id,
+    deliverySource: 'republish@bot', deliveryMessage: require('crypto').randomUUID(),
     only: targets.map((t) => t.jid), hasMedia: false, norm: text.slice(0, 400)
   });
   if (res.sent) AUD.log('owner', 'post.republish', `Post ${row.id} republished to ${res.sent} target(s)${newText ? ' with edited text' : ''}`);

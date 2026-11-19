@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light" data-design="studio" data-area="overview">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -14,17 +14,20 @@
 <link rel="apple-touch-icon" href="/pwa/icon-192.png">
 <link rel="icon" href="/pwa/icon-192.png" sizes="192x192">
 <script>
-/* theme before first paint (dark / light / glass / auto, persisted) */
+/* Apply the saved design and mode before paint. Existing preferences migrate safely. */
 try {
-  var __t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'dark';
-  if (__t === 'auto') __t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-  document.documentElement.dataset.theme = __t;
+  var old = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'auto';
+  var design = localStorage.getItem('rc-design') || (old === 'glass' ? 'mission' : 'studio');
+  if (!['studio','mission','broadcast'].includes(design)) design = 'studio';
+  var mode = ['light','dark','auto'].includes(old) ? old : (old === 'glass' ? 'dark' : 'auto');
+  document.documentElement.dataset.design = design;
+  document.documentElement.dataset.theme = mode === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : mode;
 } catch (e) {}
 </script>
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=s17">
+<link rel="stylesheet" href="/app.css?v=secure-1">
 </head>
 <body>
 <div class="app" id="app">
@@ -96,13 +99,13 @@ try {
     <div class="sb-foot sidebar-bottom">
       <div class="paired-card" id="pairedCard">
         <span class="paired-indicator" id="pairedDot"></span>
-        <div><strong id="pairedTitle">WhatsApp</strong><small id="pairedSub">Link from Home — one scan, never again</small></div>
+        <div><strong id="pairedTitle">WhatsApp</strong><small id="pairedSub">Link from Home</small></div>
       </div>
       <div class="user-row">
         <span class="avatar" id="userAvatar">RA</span>
         <div class="user-copy"><strong id="userName">Workspace owner</strong><small>Administrator</small></div>
         <button class="icon-btn" id="helpBtn" title="What does everything do? — one-line guide" aria-label="Help — what each switch does"><%- icon('help','icon icon-sm') %></button>
-        <button class="icon-btn" id="themeBtn" title="Theme: dark / light / glass / auto" aria-label="Toggle theme"></button>
+        <button class="icon-btn" id="themeBtn" title="Change design style" aria-label="Change design style"></button>
       </div>
     </div>
   </aside>
@@ -117,7 +120,8 @@ try {
         <span id="crumbGroup">COMMAND</span><b>/</b><h1 class="tb-title" id="viewTitle">Dashboard</h1>
       </div>
       <div class="tb-right top-actions">
-        <span class="connection-pill" id="connPill" title="WhatsApp link state — routine deploys never ask for a new QR scan">
+        <button class="design-switch" id="designQuick" type="button" title="Change design style"><span aria-hidden="true">◈</span> <span id="designQuickLabel">Studio</span></button>
+        <span class="connection-pill" id="connPill" title="WhatsApp connection status">
           <span class="health-dot" id="connDot"></span><span id="connState">Checking…</span><span class="muted">·</span><strong id="connName"><%= botName %> Primary</strong>
         </span>
         <span class="ro-chip" id="roChip" hidden>READ-ONLY</span>
@@ -158,13 +162,17 @@ try {
         <div id="cloudNote"></div>
         <!-- Reference home shell: eyebrow + greeting + live badge + New post -->
         <div class="page-heading">
-          <div><div class="eyebrow">OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Your broadcast desk is operating normally. Here is the signal across your channels.</p></div>
-          <div class="heading-actions"><span class="live-badge"><i></i> LIVE · 24/7</span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
+          <div><div class="eyebrow">OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Monitor your connection, channels, and publishing activity.</p></div>
+          <div class="heading-actions"><span class="live-badge" id="homeState"><i></i><span>Checking status</span></span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
         </div>
         <div class="card pausebar" id="pauseBar" data-hov>
-          <div class="pb-t"><b id="pauseHead">Mirroring is running.</b><span class="muted" id="pauseSub">Every source → every target, automatically.</span></div>
+          <div class="pb-t"><b id="pauseHead">Checking mirroring status…</b><span class="muted" id="pauseSub">Every source → every target, automatically.</span></div>
           <button class="btn btn-d" id="pauseBtn"><%- icon('pause','icon icon-xs') %> <span>Pause all mirroring</span></button>
         </div>
+        <section class="ops-brief" aria-labelledby="opsBriefTitle">
+          <div class="ops-brief-head"><div><div class="eyebrow">YOUR WORKSPACE</div><h2 id="opsBriefTitle">What needs attention</h2><p>Live checks and the next useful action, in one place.</p></div><button type="button" class="btn btn-g" data-goview="health">Open system health →</button></div>
+          <div id="opsBriefItems" class="ops-brief-items" aria-live="polite"><div class="ops-brief-loading">Checking your workspace…</div></div>
+        </section>
         <div class="kpis kpi-grid" id="kpiGrid"></div>
         <!-- Signal Desk §1.3: read-only automation chips — state only, deep-link to the owner -->
         <div class="rosw-row" id="homeSwitchChips" hidden></div>
@@ -803,6 +811,7 @@ try {
         </div>
         <div id="queueTabLive" hidden>
           <div class="kpis" id="liveKpis"></div>
+          <div class="card"><div class="card-h">Delivery review <span class="pill num" id="deliveryReviewCount">0</span></div><div class="card-b"><p class="muted tiny">A send can be accepted even when a response or read-back fails. Check the destination before deciding; retry can duplicate a message. Provider acceptance is not delivery confirmation.</p><div id="deliveryReview"></div></div></div>
           <div class="card">
             <div class="card-h">Failed posts — kept in the queue until retried or dismissed <%- icon('alert','icon') %>
               <button class="btn btn-sm btn-d" id="queueRetryAll" style="margin-left:auto"><%- icon('refresh','icon icon-xs') %> Retry all failed</button>
@@ -913,10 +922,10 @@ try {
         <div class="card">
           <div class="card-h">Safety screen <%- icon('shield','icon') %> <span class="muted tiny">— the last line before a post is routed</span></div>
           <div class="card-b">
-            <p class="muted tiny f-help">Turn the <b>AI safety screen</b> switch on (in the card above) and give a one-line rule like “no political content, no ban-risk words”. Every FINAL post must match it — the AI checks the text after all other steps. Fail-open: if the AI is unreachable the post publishes as usual (nothing is ever silently lost).</p>
+            <p class="muted tiny f-help">Turn the <b>AI safety screen</b> switch on (in the card above) and give a one-line rule like “no political content, no ban-risk words”. Every FINAL post must match it — the AI checks the text after all other steps. Choose what happens when the AI cannot decide. Human review is safer; it does not guarantee content safety.</p>
             <div class="row-form" style="margin-top:12px">
               <input class="in" id="aisafetyInput" placeholder="e.g. must be safe, legal and free of political content">
-              <button class="btn btn-p" id="aisafetySave">Save rule</button>
+              <select class="in" id="aisafetyUnavailable" aria-label="When the safety screen cannot decide"><option value="open">Continue without a verdict (legacy)</option><option value="review">Hold for human approval</option></select><button class="btn btn-p" id="aisafetySave">Save rule</button>
             </div>
           </div>
         </div>
@@ -1031,7 +1040,7 @@ try {
         <button class="vtab" data-go="guardrails" role="tab">Rules</button>
       </div>
 
-        <div class="ph"><div class="ph-l"><h2>Rules</h2><div class="ph-d">The safety net — never post spam, never flood, never double-post. Dedupe and post-shaping switches live in Settings · General, where they shape every post.</div></div></div>
+        <div class="ph"><div class="ph-l"><h2>Rules</h2><div class="ph-d">Configure safeguards to reduce spam, flooding and duplicate posts; no system can guarantee prevention. Dedupe and post-shaping switches live in Settings · General, where they shape every post.</div></div></div>
         <div class="card">
           <div class="card-h">AI safety screen <%- icon('shield','icon') %></div>
           <div class="card-b"><div class="sw-grid" id="swRules"></div></div>
@@ -1053,7 +1062,7 @@ try {
         <div class="card">
           <div class="card-h">Per-target rate caps <%- icon('gauge','icon') %></div>
           <div class="card-b">
-            <p class="muted tiny f-help">A stricter hourly cap per target channel. <b>0 = follow the global guard</b> above. The cap skips only that target — other targets still get the post, and nothing is ever dropped.</p>
+            <p class="muted tiny f-help">A stricter hourly cap per target channel. <b>0 = follow the global guard</b> above. The cap blocks that target on this attempt; other targets may proceed. Review partial outcomes before retrying.</p>
             <div class="tw" style="margin-top:12px"><table class="t" id="grTargetsTable"><thead><tr><th>Target</th><th class="num">Last hour</th><th>Max posts / hour</th></tr></thead><tbody></tbody></table></div>
             <div class="row-actions" style="margin-top:10px"><button class="btn btn-p" id="grSave">Save rate caps</button></div>
           </div>
@@ -1454,13 +1463,18 @@ try {
               </select>
               <span class="muted tiny">Urdu flips the whole console to right-to-left — best effort, the WhatsApp mirror stays as WhatsApp renders it.</span>
             </div>
-            <!-- Reference §1.4: theme lives in Workspace & language (the sidebar icon keeps working too) -->
-            <div class="row-form" style="margin-top:12px">
-              <label>Theme</label>
-              <div class="radio-line" id="themeRadios">
-                <button type="button" class="radio-pill" data-theme-choice="dark">Dark</button>
+            <div class="appearance-settings" aria-label="Appearance">
+              <div class="appearance-heading"><strong>Make it yours</strong><span>Choose a design and a colour mode independently.</span></div>
+              <div class="appearance-label">Design style</div>
+              <div class="design-choices" id="designRadios" role="group" aria-label="Design style">
+                <button type="button" class="design-choice" data-design-choice="studio"><span class="design-swatch studio-swatch" aria-hidden="true"></span><strong>Studio Light</strong><small>Clean, calm workspace</small></button>
+                <button type="button" class="design-choice" data-design-choice="mission"><span class="design-swatch mission-swatch" aria-hidden="true"></span><strong>Mission Control</strong><small>Precision operations</small></button>
+                <button type="button" class="design-choice" data-design-choice="broadcast"><span class="design-swatch broadcast-swatch" aria-hidden="true"></span><strong>Bold Broadcast</strong><small>Colourful media desk</small></button>
+              </div>
+              <div class="appearance-label">Colour mode</div>
+              <div class="radio-line" id="themeRadios" role="group" aria-label="Colour mode">
                 <button type="button" class="radio-pill" data-theme-choice="light">Light</button>
-                <button type="button" class="radio-pill" data-theme-choice="glass">Glass</button>
+                <button type="button" class="radio-pill" data-theme-choice="dark">Dark</button>
                 <button type="button" class="radio-pill" data-theme-choice="auto">System</button>
               </div>
             </div>
@@ -1496,8 +1510,8 @@ try {
         <div class="card cat">
           <div class="card-h"><%- icon('user','icon') %> Session</div>
           <div class="card-b">
-            <div class="row-actions" style="margin-top:0"><a class="btn btn-d" href="/logout"><%- icon('x','icon icon-xs') %> Sign out</a></div>
-            <p class="muted tiny f-help" style="margin-top:8px">Cloud memory, QR safety and self-heal are automatic — nothing to configure here. Read-only login and session timeout are live in this same card.</p>
+            <div class="row-actions" style="margin-top:0"><form method="post" action="/logout"><button type="submit" class="btn btn-d"><%- icon('x','icon icon-xs') %> Sign out</button></form></div>
+            <p class="muted tiny f-help" style="margin-top:8px">Cloud snapshots require explicit configuration and can fail or lag. Heroku storage is ephemeral; see Data & recovery and the Heroku guide. Read-only login and session timeout are in this card.</p>
           </div>
         </div>
         <div class="set-footbar"><b>33 optional switches</b><span class="muted">— all off by default, each lives on its own screen. Full index:</span><a class="text-link" href="#view=settings">Open 33 Options →</a></div>
@@ -1592,7 +1606,7 @@ try {
               <input class="in" id="aiKey" type="password" placeholder="API key">
               <button class="btn btn-p" id="aiSave" style="flex:none">Save AI settings</button>
             </div>
-            <p class="muted tiny" id="aiKeyLine" style="margin-top:6px"></p>
+            <p class="muted tiny" id="aiKeyLine" style="margin-top:6px"></p><label class="tgl-row"><input type="checkbox" id="aiContentSharing"><span>Allow configured AI features to send post text, chat context or audio to the chosen external AI provider. Off until explicitly enabled. Model discovery can still contact the provider when requested or settings are opened. Other integrations have separate settings.</span></label>
             <div class="row-actions" style="margin-top:4px">
               <button class="btn" id="aiTest"><%- icon('zap','icon icon-xs') %> Test connection</button>
               <span class="muted tiny" id="aiTestResult"></span>
@@ -1754,7 +1768,7 @@ try {
           <div class="opt-row"><b>Evergreen recycling</b><span class="muted tiny">Re-share proven older text posts within a daily quota (rotation + rate guard)</span><a class="text-link" href="#view=aipilot">Configure →</a></div>
           <div class="opt-row"><b>Auto-pilot</b><span class="muted tiny">Hourly self-maintenance: retry failed items, never deletes, daily cap, panic stop kills it</span><a class="text-link" href="#view=aipilot">Configure →</a></div>
           <div class="opt-h">Safety screen</div>
-          <div class="opt-row"><b>AI safety screen</b><span class="muted tiny">An AI criteria review of the FINAL text before routing — e.g. &quot;no political content&quot;. Fail-open: if the AI is down the post publishes as usual</span><a class="text-link" href="#view=guardrails">Configure →</a></div>
+          <div class="opt-row"><b>AI safety screen</b><span class="muted tiny">An AI criteria review of the FINAL text before routing — e.g. &quot;no political content&quot;. Choose whether an unavailable AI lets posts through or holds them for review</span><a class="text-link" href="#view=guardrails">Configure →</a></div>
           <div class="opt-h">Reports & Digest</div>
           <div class="opt-row"><b>AI daily digest</b><span class="muted tiny">Once a day, AI posts a summary of everything published</span><a class="text-link" href="#view=digest">Configure →</a></div>
           <div class="opt-row"><b>Morning recap</b><span class="muted tiny">Daily plain-text recap of yesterday (published/skipped/failed + up next) sent to your own number</span><a class="text-link" href="#view=digest">Configure →</a></div>
@@ -1914,6 +1928,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=s17"></script>
+<script src="/app.js?v=delivery-1"></script>
 </body>
 </html>

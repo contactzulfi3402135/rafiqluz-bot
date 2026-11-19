@@ -17,7 +17,7 @@
       </svg>
     </div>
     <h1><%= botName %></h1>
-    <p class="login-sub">v6 · owner dashboard</p>
+    <p class="login-sub">Secure workspace sign in</p>
     <% if (error) { %><div class="login-error"><%= error %></div><% } %>
     <form method="POST" action="/login" id="loginForm" autocomplete="off">
       <label>Username
@@ -28,7 +28,7 @@
       </label>
       <button type="submit" class="btn btn-p btn-block">Sign in</button>
     </form>
-        <p style="color:var(--text2);font-size:12.5px;margin-top:14px;text-align:center">Have another phone with you? <a href="/connect" style="color:var(--ok,#00a884)">Connect a number ↗</a> — pairing works without logging in.</p>
+        <p style="color:var(--text2);font-size:12.5px;margin-top:14px;text-align:center">Have another phone with you? <a href="/connect" style="color:var(--ok,#00a884)">Connect a number ↗</a> — sign in first unless public pairing is explicitly enabled.</p>
     <p class="login-foot">Protected · logins are rate-limited</p>
   </div>
   <script>
@@ -45,7 +45,7 @@
           body: JSON.stringify({ username: f.username.value, password: f.password.value })
         });
         const data = await res.json();
-        if (data.ok) { try { localStorage.setItem('rq6-token', data.token); } catch (e) {} location.href = '/admin'; }
+        if (data.ok) { try { localStorage.removeItem('rq6-token'); } catch (e) {} location.href = '/admin'; }
         else { const box = document.querySelector('.login-error') || (() => { const d = document.createElement('div'); d.className = 'login-error'; f.before(d); return d; })(); box.textContent = data.error || 'Login failed.'; }
       } catch (e) { f.submit(); }
     });

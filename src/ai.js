@@ -108,6 +108,7 @@ function paused(p) {
 const LEARNED = { effortOff: new Set(), maxMCT: new Set(), noTemp: new Set() };
 
 async function rawCall(p, prompt, { timeoutMs = 20000, maxTokens = 700 } = {}, modelOverride = null) {
+  if (!S.getBool('privacy.ai.content', false)) throw new Error('AI content sharing is off. Enable it in Settings → AI before sending content to a provider.');
   const conf = PROVIDERS[p];
   if (!conf) { const e = new Error(`Unknown provider "${p}"`); e.code = 'NO_PROVIDER'; throw e; }
   const key = keyOf(p);
@@ -186,6 +187,7 @@ async function rawCall(p, prompt, { timeoutMs = 20000, maxTokens = 700 } = {}, m
 }
 
 async function call(prompt, opts = {}) {
+  if (!S.getBool('privacy.ai.content', false)) throw new Error('AI content sharing is off. Enable it in Settings → AI first.');
   const p = providerOf();
   if (paused(p)) throw new Error('paused');
   try { return await rawCall(p, prompt, opts); }
@@ -200,6 +202,7 @@ const FEATURES_5C = ['beautify', 'translate', 'autoReply', 'composer', 'tldr', '
 const featureProvider = (f) => String(S.get(`ai.feature.${f}.provider`, '')).trim().toLowerCase();
 const featureModel = (f) => String(S.get(`ai.feature.${f}.model`, '')).trim();
 async function callFor(feature, prompt, opts = {}) {
+  if (!S.getBool('privacy.ai.content', false)) throw new Error('AI content sharing is off. Enable it in Settings → AI first.');
   const p = featureProvider(feature) || providerOf();
   if (!PROVIDERS[p]) { const e = new Error(`Unknown provider "${p}" for this feature`); e.code = 'NO_PROVIDER'; throw e; }
   if (paused(p)) throw new Error('paused');
@@ -216,6 +219,7 @@ async function callFor(feature, prompt, opts = {}) {
 /** 5C (R58): voice transcription — Gemini is the only provider wired for
     inline audio input; anything else gets an honest, actionable error. */
 async function transcribe(buf, mime = 'audio/ogg') {
+  if (!S.getBool('privacy.ai.content', false)) throw new Error('AI content sharing is off. Enable it in Settings → AI first.');
   const p = featureProvider('transcribe') || providerOf();
   if (p !== 'gemini') throw new Error('Voice transcription needs a Gemini key (Settings · AI → pin the "Voice transcription" feature to Gemini) — the other providers are not wired for audio input.');
   const key = keyOf(p);
@@ -268,7 +272,7 @@ async function testConnection() {
   }
 }
 
-const usable = () => Boolean(keyOf(providerOf())) && Boolean(modelOf(providerOf()) || PROVIDERS[providerOf()]?.model);
+const usable = () => S.getBool('privacy.ai.content', false) && Boolean(keyOf(providerOf())) && Boolean(modelOf(providerOf()) || PROVIDERS[providerOf()]?.model);
 
 /** Owner's find→replace rules ("old=>new" per line, max 30).
     5F (R79): a line starting with "-" is a DISABLED rule ("- old=>new") —
@@ -335,6 +339,7 @@ async function translate(text, lang) {
 async function chat(message) {
   const userMsg = String(message || '').trim();
   if (!userMsg) throw new Error('Type a message first.');
+  if (!S.getBool('privacy.ai.content', false)) throw new Error('AI content sharing is off. Enable it in Settings → AI first.');
   if (!usable()) throw new Error('Add an AI key first (Settings → AI provider). The OpenRouter free model works with a $0 balance.');
   if (paused(providerOf())) {
     const p = providerOf();
@@ -370,7 +375,7 @@ async function matches(text, criteria) {
   if (!input || !String(criteria || '').trim() || !usable() || paused(featureProvider('match') || providerOf())) return null;
   try {
     const out = await callFor('match', `Does this WhatsApp channel post match this rule? RULE: "${criteria}". POST: "${input.slice(0, 2000)}". Answer strictly YES or NO.`);
-    return /yes/i.test(out) ? true : /no/i.test(out) ? false : null;
+    return /^\s*yes[.!]?\s*$/i.test(out) ? true : /^\s*no[.!]?\s*$/i.test(out) ? false : null;
   } catch { return null; }
 }
 
@@ -454,7 +459,7 @@ async function listModels(p, { refresh = false } = {}) {
 function state() {
   const p = providerOf();
   return {
-    provider: p, model: modelOf(p), hasKey: Boolean(keyOf(p)), paused: Date.now() < (pausedUntil[p] || 0),
+    contentSharing: S.getBool('privacy.ai.content', false), provider: p, model: modelOf(p), hasKey: Boolean(keyOf(p)), paused: Date.now() < (pausedUntil[p] || 0),
     keyStatus: Object.fromEntries(Object.keys(PROVIDERS).map((id) => [id, Boolean(keyOf(id))])),   // v7.3.3
     pauseInfo: { until: pausedUntil[p] || 0, label: pauseLabel[p] || '' },                              // v7.3.3
     providers: Object.entries(PROVIDERS).map(([id, c]) => ({ id, name: c.name, keyUrl: c.keyUrl, free: Boolean(c.free), models: c.models }))

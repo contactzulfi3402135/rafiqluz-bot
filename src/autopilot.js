@@ -49,16 +49,7 @@ async function pass(by = 'hourly') {
     } catch { /* no failed posts or nothing to do */ }
   }
 
-  // 3 · zombie "processing" rows stuck for > 30 min → reset to pending
-  //    (created_at is the age proxy — a processing row that old never moved)
-  const zombies = d.prepare("SELECT id FROM approvals WHERE status='processing' AND created_at < datetime('now','-30 minutes') ORDER BY id ASC").all().slice(0, Math.min(5, budget));
-  for (const z of zombies) {
-    if (usedToday() >= maxDay()) break;
-    try {
-      d.prepare("UPDATE approvals SET status='pending' WHERE id=?").run(z.id);
-      log('unstick', `Reset a stuck queue item (${z.id}) back to pending`);
-    } catch { }
-  }
+  // In-flight rows are never reset automatically: the remote outcome may be unknown.
 
   log('pass', `Auto-pilot pass complete (${by}) — ${usedToday()}/${maxDay()} actions used today`);
 }

@@ -66,22 +66,26 @@ function setJobEnabled(id, v) { const l = jobs(); const j = l.find((x) => x.id =
 function advance(job) {
   const t = new Date(job.at);
   if (job.repeat === 'once') return null;
-  if (job.repeat === 'daily') { while (t.getTime() <= Date.now()) t.setTime(t.getTime() + 86400e3); return t.toISOString(); }
-  if (job.repeat === 'weekly') { while (t.getTime() <= Date.now()) t.setTime(t.getTime() + 7 * 86400e3); return t.toISOString(); }
   if (job.repeat === 'interval') { const step = Math.max(60e3, (job.intervalMin || 30) * 60e3); while (t.getTime() <= Date.now()) t.setTime(t.getTime() + step); return t.toISOString(); }
-  if (job.repeat === 'weekdays') {
-    const days = String(job.weekdays || '1,2,3,4,5').split(',').map((w) => parseInt(w, 10)).filter((w) => w >= 1 && w <= 7);
-    if (!days.length) return null;
-    const orig = wallParts(job.at, job.tz || DEFAULT_TZ);
-    if (!orig) return null;
-    for (let i = 1; i <= 8; i++) {
-      const cand = new Date(Date.parse(job.at) + i * 86400e3);
-      const cp = wallParts(cand.toISOString(), job.tz || DEFAULT_TZ);
-      if (!cp) continue;
-      const isoWd = (new Date(Date.UTC(cp.y, cp.mo - 1, cp.d)).getUTCDay() + 6) % 7 + 1; // ISO weekday of that calendar day, 1=Mon..7=Sun
-      if (!days.includes(isoWd)) continue;
-      const iso = localToUtc(`${cp.y}-${String(cp.mo).padStart(2, '0')}-${String(cp.d).padStart(2, '0')}T${orig.hm}`, job.tz || DEFAULT_TZ);
-      if (Date.parse(iso) > Date.now()) return iso;
+  if (['daily','weekly','weekdays'].includes(job.repeat)) {
+    const tz = job.tz || DEFAULT_TZ;
+    const original = wallParts(job.at,tz), today = wallParts(new Date(Date.now()).toISOString(),tz);
+    if (!original || !today) return null;
+    const originalDay = Date.UTC(original.y,original.mo-1,original.d);
+    const todayDay = Date.UTC(today.y,today.mo-1,today.d);
+    const weekdays = String(job.weekdays || '1,2,3,4,5').split(',').map(Number).filter(w=>w>=1&&w<=7);
+    if (job.repeat === 'weekdays' && !weekdays.length) return null;
+    // Search from today in local calendar days, preserving the original wall time.
+    for (let i=0;i<=8;i++) {
+      const day = todayDay + i*86400e3, date = new Date(day);
+      const offset = Math.round((day-originalDay)/86400e3);
+      if (offset < 0) continue;
+      if (job.repeat === 'weekly' && offset%7!==0) continue;
+      const wd=(date.getUTCDay()+6)%7+1;
+      if (job.repeat === 'weekdays' && !weekdays.includes(wd)) continue;
+      const local=`${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}T${original.hm}`;
+      const candidate=localToUtc(local,tz);
+      if (Date.parse(candidate)>Date.now() && Date.parse(candidate)>Date.parse(job.at)) return candidate;
     }
     return null;
   }
@@ -129,30 +133,33 @@ function calendar(monthStr) {
   return { month: `${yy}-${String(mm).padStart(2, '0')}`, days };
 }
 
+let ticking = false;
 async function tick() {
-  if (!pipeline.switches().scheduler) return;
-  if (require('./panic').active()) return; // 5E (R73): panic stop freezes the scheduler
-  for (const job of jobs()) {
-    try {
-      if (!job.enabled) continue;
-      const when = Date.parse(job.at);
-      if (!Number.isFinite(when) || when > Date.now()) continue;
-      // 5A (R45): a scheduled post may reference a template — run the text through it
-      let text = job.text;
-      if (job.templateId) {
-        try { text = String(require('./templates').apply(job.text, {}).text || job.text); } catch { /* template gone → publish as-is */ }
-      }
-      ring.info('scheduler.run', `Publishing scheduled post "${job.name || job.id}" → ${job.jid}${job.templateId ? ` (template: ${job.templateId})` : ''}`);
-      const res = await publishMod.publish({ text }, { only: [job.jid] });
-      job.sent += 1; job.lastRun = new Date().toISOString();
-      if (res.sent) {
-        const next = advance(job);
-        if (!next) { job.enabled = false; job.done = true; } else job.at = next;
-      }
-      // failed run: keep enabled — the next 30 s tick retries
-      saveJobs(jobs());
-    } catch (err) { ring.warn('scheduler.fail', `Scheduled post failed: ${err.message} — retrying next tick`); }
-  }
+  if (ticking || require('./lifecycle').isStopping() || !pipeline.switches().scheduler || require('./panic').active()) return;
+  ticking = true;
+  try {
+    for (const job of jobs()) {
+      try {
+        if (!job.enabled || !Number.isFinite(Date.parse(job.at)) || Date.parse(job.at) > Date.now()) continue;
+        let text = job.text;
+        if (job.templateId) { try { text = String(require('./templates').apply(job.text, {}).text || job.text); } catch {} }
+        const runId = `${job.id}:${job.at}`;
+        const res = await publishMod.publish({text}, {only:[job.jid], sourceJid:'scheduler@bot', sourceMsgId:runId});
+        // Re-read before saving so changes made through the UI while the send was
+        // in flight are not overwritten. The same occurrence has one journal key.
+        const list = jobs(); const current = list.find(x => x.id === job.id);
+        if (!current || current.at !== job.at) continue;
+        current.lastRun = new Date().toISOString();
+        current.lastError = (res.errors || []).join(' | ').slice(0,300);
+        if (res.complete) {
+          current.sent = (Number(current.sent) || 0) + 1;
+          const next = advance(job);
+          if (!next) { current.enabled = false; current.done = true; } else current.at = next;
+        }
+        saveJobs(list);
+      } catch (err) { ring.warn('scheduler.fail', `Scheduled post requires attention: ${err.message}`); }
+    }
+  } finally { ticking = false; }
 }
 
 function start() { setInterval(() => tick().catch(() => { }), 30000).unref?.(); }
@@ -174,4 +181,4 @@ function analytics(days = 14) {
   return out;
 }
 
-module.exports = { addJob, removeJob, setJobEnabled, jobs, start, analytics, calendar, advance, localToUtc, resave: saveJobs, DEFAULT_TZ };
+module.exports = { addJob, removeJob, setJobEnabled, jobs, start, tick, analytics, calendar, advance, localToUtc, resave: saveJobs, DEFAULT_TZ };

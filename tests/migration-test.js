@@ -1,0 +1,27 @@
+'use strict';
+// Upgrade a representative old SQLite layout without deleting its records.
+const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert');
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'raq-migrate-'));
+const cfg=require('../src/config');cfg.config.paths.database=path.join(tmp,'old.sqlite');cfg.config.paths.sessions=path.join(tmp,'sessions');
+const Database=require('better-sqlite3');const old=new Database(cfg.config.paths.database);
+old.exec(`CREATE TABLE settings(key TEXT PRIMARY KEY,value TEXT);
+INSERT INTO settings VALUES('example.setting','preserved');
+CREATE TABLE sources(jid TEXT PRIMARY KEY,name TEXT,added_at TEXT,added_by TEXT,paused INTEGER DEFAULT 0,targets TEXT DEFAULT '',last_post_at TEXT DEFAULT '');
+INSERT INTO sources(jid,name) VALUES('source@newsletter','Existing');
+CREATE TABLE posts(id INTEGER PRIMARY KEY AUTOINCREMENT,source_jid TEXT,source_msg_id TEXT,status TEXT,reason TEXT,created_at TEXT DEFAULT (datetime('now')));
+INSERT INTO posts(source_jid,source_msg_id,status,reason) VALUES('source@newsletter','old-message','published','existing');
+CREATE TABLE post_keys(post_id INTEGER,target_jid TEXT,msg_id TEXT,at TEXT DEFAULT (datetime('now')));
+INSERT INTO post_keys(post_id,target_jid,msg_id) VALUES(1,'target@newsletter','old-provider-id');
+CREATE TABLE approvals(id INTEGER PRIMARY KEY AUTOINCREMENT,source_jid TEXT,source_msg_id TEXT,text TEXT,media_kind TEXT DEFAULT '',media_path TEXT DEFAULT '',status TEXT DEFAULT 'pending',hold_until TEXT DEFAULT '',msg_ts INTEGER DEFAULT 0,targets TEXT DEFAULT '',created_at TEXT DEFAULT (datetime('now')),decided_at TEXT DEFAULT '',note TEXT DEFAULT '');
+INSERT INTO approvals(source_jid,source_msg_id,text,hold_until) VALUES('source@newsletter','draft','keep draft','2000-01-01T00:00:00Z');
+CREATE TABLE source_rules(source_jid TEXT PRIMARY KEY,approve_first INTEGER DEFAULT 0,active_from TEXT DEFAULT '',active_to TEXT DEFAULT '',max_per_day INTEGER DEFAULT 0,include TEXT DEFAULT '',exclude TEXT DEFAULT '',auto_pause INTEGER DEFAULT 0,priority INTEGER DEFAULT 3);
+INSERT INTO source_rules(source_jid,approve_first) VALUES('source@newsletter',1);`); old.close();
+const db=require('../src/db');const d=db.open();
+assert.equal(db.S.get('example.setting'),'preserved');assert.equal(db.CH.listSources()[0].name,'Existing');
+assert.equal(db.P.keys(1)[0].msg_id,'old-provider-id');assert.equal(db.Q.one(1).text,'keep draft');
+console.log('✓ old settings, sources, posts, keys and queued content survive additive migration');
+require('../src/queue5a').start();assert.equal(db.Q.one(1).status,'pending');assert.equal(db.Q.one(1).hold_until,'');
+console.log('✓ old approve-first draft is converted to a manual decision');
+assert.equal(require('../src/delivery-ledger').hasLegacyCopies('source@newsletter','old-message'),true);
+console.log('✓ old recorded target copy is recognised as legacy');
+d.close();fs.rmSync(tmp,{recursive:true,force:true});console.log('PASS: 3 migration checks');

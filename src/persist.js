@@ -25,8 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const archiver = require('archiver');
-const extract = require('extract-zip');
+const safeArchive = require('./safe-archive');
 const cfg = require('./config');
 const { ring } = require('./logger');
 
@@ -138,12 +137,15 @@ async function snapshot() {
       } finally { snapDb.close(); }
     }
   } catch { /* checkpoint is best-effort — the files below are still zipped */ }
+  const { ZipArchive } = await import('archiver');
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
-    const archive = archiver('zip', { zlib: { level: 6 } });
+    const archive = new ZipArchive({ zlib: { level: 6 } });
     output.on('close', resolve); archive.on('error', reject);
     archive.pipe(output);
     if (fs.existsSync(cfg.config.paths.sessions)) archive.directory(cfg.config.paths.sessions, 'sessions');
+    const holdDir = path.join(path.dirname(dbFile), 'media-hold');
+    if (process.env.PERSIST_HOLD_MEDIA === '1' && fs.existsSync(holdDir)) archive.directory(holdDir, 'media-hold');
     if (fs.existsSync(dbFile)) {
       archive.file(dbFile, { name: path.basename(dbFile) });
       for (const extra of [dbFile + '-wal', dbFile + '-shm']) {
@@ -191,6 +193,8 @@ function stateHash() {
     }
   };
   if (fs.existsSync(sess)) walk(sess, 'sessions');
+  const holdDir = path.join(path.dirname(dbFile), 'media-hold');
+  if (process.env.PERSIST_HOLD_MEDIA === '1' && fs.existsSync(holdDir)) walk(holdDir, 'media-hold');
   return h.digest('hex');
 }
 
@@ -412,7 +416,8 @@ async function download() {
 /** Restore: only fill MISSING files — local state is always newer. */
 async function restoreFromZip(zipPath) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'raq7-restore-'));
-  await extract(zipPath, { dir: tmp });
+  try {
+  await safeArchive.extract(zipPath, tmp);
   let sessionFiles = 0; let dbRestored = false;
   const sessSrc = path.join(tmp, 'sessions');
   if (fs.existsSync(sessSrc)) {
@@ -438,7 +443,20 @@ async function restoreFromZip(zipPath) {
       if (fs.existsSync(e) && !fs.existsSync(d)) { try { fs.copyFileSync(e, d); } catch { } }
     }
   }
+  // Restore held media only alongside a newly restored database, never over local files.
+  const holdSrc = path.join(tmp, 'media-hold');
+  const holdDst = path.join(path.dirname(cfg.config.paths.database), 'media-hold');
+  if (dbRestored && fs.existsSync(holdSrc)) {
+    fs.mkdirSync(holdDst, { recursive:true });
+    for (const entry of fs.readdirSync(holdSrc, {withFileTypes:true})) {
+      if (entry.isFile() && /^\d+\.(jpg|mp4|bin)$/.test(entry.name)) {
+        const dest = path.join(holdDst, entry.name);
+        if (!fs.existsSync(dest)) fs.copyFileSync(path.join(holdSrc,entry.name),dest);
+      }
+    }
+  }
   return { sessionFiles, dbRestored };
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
 const localStateEmpty = () => {
@@ -570,7 +588,7 @@ async function backupNow() {
 
 function publicStatus() {
   return {
-    enabled: enabled(), repo: C.repo, repoUsed: repoUsed(), branch: C.branch,
+    enabled: enabled(), repo: C.repo, repoUsed: repoUsed(), branch: C.branch, heldMediaIncluded: process.env.PERSIST_HOLD_MEDIA === '1',
     lastSyncAt: status.lastSyncAt, lastSyncReason: status.lastSyncReason,
     lastError: status.lastError, lastKB: status.lastBytes ? Math.round(status.lastBytes / 1024) : 0,
     restoredFiles: status.restoredFiles, lastRestoreAt: status.lastRestoreAt,
@@ -685,4 +703,4 @@ async function githubStats(opts) {
   return val;
 }
 
-module.exports = { restoreEarly, start, enabled, backupNow, syncSoon, flush, publicStatus, diagnose, parseRepo, upload, compactNow, githubStats };
+module.exports = { restoreEarly, start, enabled, backupNow, syncSoon, flush, publicStatus, diagnose, parseRepo, upload, compactNow, githubStats, _test: { snapshot, restoreFromZip, stateHash } };

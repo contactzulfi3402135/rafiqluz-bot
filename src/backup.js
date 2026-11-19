@@ -79,39 +79,46 @@ function buildZip(files) { // [{ name, data: Buffer }]
 
 /* ── minimal ZIP reader (STORE + DEFLATE) for uploads ── */
 function readZip(buf) {
-  // locate EOCD (scan back from the end, max 64 KB comment)
+  // Untrusted uploads: bound compressed and expanded sizes, entry count and
+  // offsets before touching a decompressor. Never extract paths to disk.
+  const MAX_ARCHIVE = 200 * 1024 * 1024, MAX_TOTAL = 200 * 1024 * 1024, MAX_ENTRY = 100 * 1024 * 1024;
+  if (!Buffer.isBuffer(buf) || buf.length > MAX_ARCHIVE || buf.length < 22) throw new Error('Invalid or oversized zip file.');
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
-    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+    if (buf.readUInt32LE(i) === 0x06054b50 && i + 22 + buf.readUInt16LE(i + 20) === buf.length) { eocd = i; break; }
   }
-  if (eocd < 0) throw new Error('Not a zip file.');
-  const count = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
-  const out = [];
+  if (eocd < 0) throw new Error('Not a valid zip file.');
+  const count = buf.readUInt16LE(eocd + 10), dirSize = buf.readUInt32LE(eocd + 12);
+  let p = buf.readUInt32LE(eocd + 16), expanded = 0;
+  if (buf.readUInt16LE(eocd + 4) || buf.readUInt16LE(eocd + 6) || count !== buf.readUInt16LE(eocd + 8) || count > 64 || p + dirSize > eocd) throw new Error('Unsupported zip directory.');
+  const end = p + dirSize, out = [];
   for (let n = 0; n < count; n++) {
-    if (buf.readUInt32LE(p) !== 0x02014b50) throw new Error('Corrupt zip central directory.');
-    const method = buf.readUInt16LE(p + 10);
-    const size = buf.readUInt32LE(p + 20);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const cmtLen = buf.readUInt16LE(p + 32);
-    const localOff = buf.readUInt32LE(p + 42);
+    if (p + 46 > end || buf.readUInt32LE(p) !== 0x02014b50) throw new Error('Corrupt zip central directory.');
+    const flags = buf.readUInt16LE(p + 8), method = buf.readUInt16LE(p + 10), crc = buf.readUInt32LE(p + 16);
+    const size = buf.readUInt32LE(p + 20), outputSize = buf.readUInt32LE(p + 24);
+    const nameLen = buf.readUInt16LE(p + 28), extraLen = buf.readUInt16LE(p + 30), cmtLen = buf.readUInt16LE(p + 32), localOff = buf.readUInt32LE(p + 42);
+    if ((flags & 1) || ![0,8].includes(method) || outputSize > MAX_ENTRY || (expanded += outputSize) > MAX_TOTAL || p + 46 + nameLen + extraLen + cmtLen > end) throw new Error('Unsupported or oversized zip entry.');
     const name = buf.slice(p + 46, p + 46 + nameLen).toString('utf8');
-    const lNameLen = buf.readUInt16LE(localOff + 26);
-    const lExtraLen = buf.readUInt16LE(localOff + 28);
-    const start = localOff + 30 + lNameLen + lExtraLen;
-    const raw = buf.slice(start, start + size);
-    const data = method === 8 ? zlib.inflateRawSync(raw) : raw;
+    if (name.includes('..') || name.includes('\\') || name.startsWith('/')) throw new Error('Invalid zip entry name.');
+    if (localOff + 30 > buf.length || buf.readUInt32LE(localOff) !== 0x04034b50) throw new Error('Corrupt zip entry.');
+    const start = localOff + 30 + buf.readUInt16LE(localOff + 26) + buf.readUInt16LE(localOff + 28);
+    if (start + size > end || start > end) throw new Error('Corrupt zip data.');
+    const raw = buf.subarray(start, start + size);
+    let data;
+    try { data = method === 8 ? zlib.inflateRawSync(raw, {maxOutputLength: MAX_ENTRY}) : raw; }
+    catch { throw new Error('Invalid or oversized compressed entry.'); }
+    if (data.length !== outputSize || crc32(data) !== crc) throw new Error('Zip entry integrity check failed.');
     out.push({ name, data });
     p += 46 + nameLen + extraLen + cmtLen;
   }
+  if (p !== end) throw new Error('Invalid zip directory length.');
   return out;
 }
 
 /* ── download: a consistent snapshot of the live DB + manifest ── */
 function downloadZip() {
   const d = db.open();
-  const tmp = path.join(__dirname, '..', 'data', `_dl-${Date.now()}.sqlite`);
+  const tmp = path.join(path.dirname(require('./config').config.paths.database), `_dl-${require('crypto').randomBytes(12).toString('hex')}.sqlite`);
   d.exec(`VACUUM INTO '${tmp.replace(/'/g, "''")}'`);
   const sql = fs.readFileSync(tmp);
   fs.unlinkSync(tmp);
@@ -167,7 +174,7 @@ function extractSqlite(buf) {
 function restoreFromBuffer(buf) {
   const data = extractSqlite(buf);
   if (data.slice(0, 15).toString('latin1') !== 'SQLite format 3') throw new Error('Not a SQLite database.');
-  const staged = path.join(__dirname, '..', 'data', `_restore-${Date.now()}.sqlite`);
+  const staged = path.join(path.dirname(require('./config').config.paths.database), `_restore-${require('crypto').randomBytes(12).toString('hex')}.sqlite`);
   fs.writeFileSync(staged, data);
   let before;
   try {
@@ -185,10 +192,17 @@ function restoreFromBuffer(buf) {
       const txn = d.transaction(() => {
         const liveTables = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' AND name NOT LIKE '%_data' AND name NOT LIKE '%_idx' AND name NOT LIKE '%_content' AND name NOT LIKE '%_docsize'").all().map((r) => r.name);
         for (const t of liveTables) {
-          if (tables.includes(t)) d.exec(`DELETE FROM [${t}]; INSERT INTO [${t}] SELECT * FROM src.[${t}];`);
-          else d.exec(`DELETE FROM [${t}];`);
+          // A backup from an older version cannot erase newer tables. Copy
+          // shared columns explicitly so additive schema migrations survive.
+          if (!tables.includes(t)) continue;
+          const quote = x => '"' + String(x).replace(/"/g, '""') + '"';
+          const current = d.prepare(`PRAGMA main.table_info(${quote(t)})`).all();
+          const incoming = new Set(d.prepare(`PRAGMA src.table_info(${quote(t)})`).all().map(c => c.name));
+          const cols = current.filter(c => incoming.has(c.name)).map(c => quote(c.name));
+          if (!cols.length) throw new Error('No compatible columns in table: ' + t);
+          d.exec(`DELETE FROM ${quote(t)}; INSERT INTO ${quote(t)} (${cols.join(',')}) SELECT ${cols.join(',')} FROM src.${quote(t)};`);
         }
-        try { d.exec('DELETE FROM sqlite_sequence'); d.exec('INSERT INTO sqlite_sequence SELECT * FROM src.sqlite_sequence'); } catch { }
+        // INSERT updates live AUTOINCREMENT sequences; untouched newer tables keep theirs.
         for (const f of ['posts_fts', 'logs_fts', 'inbox_fts']) { try { d.exec(`INSERT INTO [${f}]([${f}]) VALUES('rebuild')`); } catch { } }
       });
       txn();

@@ -30,7 +30,23 @@ const webhooks = require('../webhooks');     // 5G (R80): outgoing webhooks (off
 const rss = require('../rss');               // 5G (R82): RSS/Atom source type
 const { SR, RC, LAT, AUD, SN, DR, AIU, PL, GL, RB } = require('../db'); // 5A: rule cards, matrix, latency, audit · 5B: snippets, drafts · 5C: AI usage, prompts, glossary, reply KB
 
-const tokens = new Set(); // bearer tokens issued this process
+// Process-local bearer credentials retain the role and session that issued them.
+// They expire after the configured idle timeout and are revoked on sign-out.
+const tokens = new Map();
+function tokenFor(req) {
+  const h = String(req.get('authorization') || '');
+  if (!h.startsWith('Bearer ')) return null;
+  const key = h.slice(7), t = tokens.get(key);
+  if (!t) return null;
+  if (Date.now() - t.lastUsed > t.timeoutMs || Date.now() - t.createdAt > 24 * 3600e3) { tokens.delete(key); return null; }
+  t.lastUsed = Date.now();
+  return t;
+}
+function revokeSessionTokens(id) {
+  if (!id) return;
+  for (const [key, value] of tokens) if (value.sessionId === id) tokens.delete(key);
+}
+
 
 function checkCredentials(username, password) {
   if (!username || String(username).trim() !== cfg.config.dashboard.username) return false;
@@ -40,6 +56,25 @@ function checkCredentials(username, password) {
 }
 
 function build(app) {
+  app.disable('x-powered-by');
+  // Default platform proxy chain is one hop (Heroku). Override only if the
+  // deployment is actually behind a trusted reverse proxy.
+  if (process.env.TRUST_PROXY === '1' || process.env.DYNO) app.set('trust proxy', 1);
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    // Arena's preview is intentionally embedded; regular deployments deny framing.
+    if (!/\.e2b\.app(?::\d+)?$/i.test(req.get('host') || '')) res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    if (['GET','HEAD','OPTIONS'].includes(req.method)) return next();
+    // Cross-site browser mutations must not use ambient cookie authority.
+    if (req.get('sec-fetch-site') === 'cross-site') return res.status(403).json({ok:false,error:'Cross-site request rejected.'});
+    const origin = req.get('origin');
+    if (origin) {
+      try { if (new URL(origin).host !== req.get('host')) return res.status(403).json({ok:false,error:'Cross-origin request rejected.'}); }
+      catch { return res.status(403).json({ok:false,error:'Invalid request origin.'}); }
+    }
+    next();
+  });
   app.set('view engine', 'ejs');
   app.set('views', path.join(__dirname, 'views'));
   app.use(express.static(path.join(__dirname, 'assets'), { maxAge: '1h' }));
@@ -48,17 +83,26 @@ function build(app) {
   /* v7.3.6: profile-photo cache for the WhatsApp tab (served under /media/avatars) */
   const AVA_DIR = path.join(__dirname, '..', '..', 'data', 'avatars');
   fs.mkdirSync(AVA_DIR, { recursive: true });
-  app.use('/media/avatars', express.static(AVA_DIR, { maxAge: '30m' }));
   app.use(express.json({ limit: '2mb' }));
+  app.use(express.urlencoded({ extended: false, limit: '64kb' }));
   /* 5E (R71): configurable idle session timeout (minutes, default 120) —
      rolling, so active owners are never logged out mid-work. */
   const sessionTimeoutMs = () => Math.min(24 * 3600e3, Math.max(5, parseInt(S.get('session.timeout_min', '120'), 10) || 120) * 60e3);
+  const configuredSecret = cfg.config.dashboard.sessionSecret;
+  const sessionSecret = configuredSecret && !/^(change-me|replace-this)/i.test(configuredSecret) ? configuredSecret : crypto.randomBytes(32).toString('hex');
+  if (sessionSecret !== configuredSecret) ring.warn('dashboard.secret', 'SESSION_SECRET is missing or default; using a temporary random secret. Set a long random SESSION_SECRET to keep sessions across restarts.');
   app.use(session({
-    secret: cfg.config.dashboard.sessionSecret, resave: false, saveUninitialized: false, rolling: true,
-    cookie: { maxAge: 120 * 60e3, sameSite: 'lax' }
+    secret: sessionSecret, resave: false, saveUninitialized: false, rolling: true,
+    cookie: { maxAge: 120 * 60e3, sameSite: 'lax', httpOnly: true, secure: 'auto' }
   }));
   /* the timeout is re-read on every request, so the Security card's changes apply live */
   app.use((req, res, next) => { try { if (req.session && req.session.cookie) req.session.cookie.maxAge = sessionTimeoutMs(); } catch { } next(); });
+
+  // Profile photos are private customer data, not public static assets.
+  app.use('/media/avatars', (req, res, next) => {
+    if (!req.session?.authenticated) return res.status(401).end();
+    next();
+  }, express.static(AVA_DIR, { maxAge: '30m', setHeaders: res => res.setHeader('Cache-Control', 'private, max-age=1800') }));
 
   const loginLimiter = rateLimit({ windowMs: 15 * 60e3, max: 12, standardHeaders: true, legacyHeaders: false,
     handler: (req, res) => res.status(429).json({ ok: false, error: 'Too many attempts — wait 15 minutes.' }) });
@@ -98,32 +142,42 @@ function build(app) {
     }).catch(() => { }).finally(() => { nameResolveQueued = false; });
   };
 
+  const sseClients = new Set();
   const auth = (req, res, next) => {
-    if (req.session?.authenticated) return next();
-    const h = String(req.get('authorization') || '');
-    if (h.startsWith('Bearer ') && tokens.has(h.slice(7))) return next();
-    const key = String(req.get('x-api-key') || '');           // v6.1: permanent owner API key
-    if (key && key === S.get('api.key', '')) return next();
+    if (req.session?.authenticated) { req.authRole = req.session.role === 'readonly' ? 'readonly' : 'full'; return next(); }
+    const t = tokenFor(req);
+    if (t) { req.authRole = t.role; return next(); }
+    const key = String(req.get('x-api-key') || ''), expected = S.get('api.key', '');
+    if (key && expected && Buffer.byteLength(key) === Buffer.byteLength(expected) && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(expected))) { req.authRole = 'full'; return next(); }
     res.status(401).json({ ok: false, error: 'Not logged in.' });
+  };
+  // Public pairing is deliberately opt-in: it can add or replace accounts.
+  const publicPairing = process.env.PUBLIC_PAIRING === '1';
+  const pairAuth = (req, res, next) => {
+    if (publicPairing) return next();
+    if (req.session?.authenticated) return req.session.role !== 'readonly' ? next() : res.status(403).json({ok:false,error:'Owner access required.'});
+    const t = tokenFor(req);
+    if (t && t.role === 'full') return next();
+    res.status(401).json({ok:false,error:'Sign in as the owner to connect a number.'});
   };
 
   app.get('/healthz', (req, res) => res.status(200).send('ok'));
 
-  app.get('/', (req, res) => res.redirect(req.session?.authenticated ? '/admin' : '/connect'));
+  app.get('/', (req, res) => res.redirect(req.session?.authenticated ? '/admin' : (publicPairing ? '/connect' : '/login')));
   /* ── v7: PUBLIC pairing page — any number can be linked by scanning here.
      Chats stay inside the password-protected dashboard. ── */
-  app.get('/connect', (req, res) => res.render('connect', {
+  app.get('/connect', (req, res) => { if (!publicPairing && (!req.session?.authenticated || req.session.role === 'readonly')) return res.redirect('/login'); return res.render('connect', {
     botName: cfg.config.botName, version: cfg.config.version, authed: Boolean(req.session?.authenticated),
     cloud: require('../persist').publicStatus()
-  }));
+  }); });
   const publicLimiter = rateLimit({ windowMs: 15 * 60e3, max: 30, standardHeaders: true, legacyHeaders: false,
     handler: (req, res) => res.status(429).json({ ok: false, error: 'Too many pairing requests — wait 15 minutes.' }) });
-  app.post('/api/public/connect', publicLimiter, async (req, res) => {
+  app.post('/api/public/connect', pairAuth, publicLimiter, async (req, res) => {
     try { const r = await numbers.add(String(req.body?.label || '')); res.json({ ok: true, ...r }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
   /* v7.3.3: pairing code — anyone can connect by typing a code on their phone (no QR). */
-  app.post('/api/public/pair', publicLimiter, async (req, res) => {
+  app.post('/api/public/pair', pairAuth, publicLimiter, async (req, res) => {
     try {
       const replace = String(req.body?.replace || '');
       if (replace) {
@@ -133,12 +187,12 @@ function build(app) {
       res.json({ ok: true, ...r });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
-  app.get('/api/public/connect/:id', async (req, res) => {
+  app.get('/api/public/connect/:id', pairAuth, async (req, res) => {
     const v = numbers.publicView(req.params.id);
     const qr = v.status === 'qr' ? await numbers.qrDataUrl(req.params.id) : null;
     res.json({ ok: true, ...v, qr });
   });
-  app.get('/api/public/numbers', (req, res) => {
+  app.get('/api/public/numbers', pairAuth, (req, res) => {
     res.json({ ok: true, list: numbers.list().map((n) => ({ id: n.id, label: n.label, phone: n.phone, status: n.status })) });
   });
   app.get('/login', (req, res) => res.render('login', { error: null, botName: cfg.config.botName }));
@@ -171,20 +225,37 @@ function build(app) {
       return res.status(401).render('login', { error: 'Invalid username or password.', botName: cfg.config.botName });
     }
     const role = isRo ? 'readonly' : 'full';
-    req.session.authenticated = true;
-    req.session.role = role;
-    const token = crypto.randomBytes(24).toString('hex');
-    tokens.add(token);
-    ring.info('dashboard.login', `Dashboard login: ${String(username).trim()} (${role})`);
-    try { AUD.log('owner', role === 'readonly' ? 'login.readonly' : 'login', `${role === 'readonly' ? 'Read-only' : 'Full'} session from ${req.ip}`); } catch { }
-    loginAlert(role, req);
-    if (wantsJson) return res.json({ ok: true, token, role });
-    res.redirect('/admin');
+    const oldId = req.sessionID;
+    revokeSessionTokens(oldId);
+    req.session.regenerate((err) => {
+      if (err) return res.status(500).json({ok:false,error:'Could not start a secure session.'});
+      req.session.authenticated = true;
+      req.session.role = role;
+      req.session.username = String(username).trim();
+      const token = crypto.randomBytes(24).toString('hex');
+      const now = Date.now();
+      for (const [k, t] of tokens) if (now - t.lastUsed > t.timeoutMs || now - t.createdAt > 24 * 3600e3) tokens.delete(k);
+      while (tokens.size >= 1000) tokens.delete(tokens.keys().next().value);
+      tokens.set(token, {role, sessionId:req.sessionID, createdAt:now, lastUsed:now, timeoutMs:sessionTimeoutMs()});
+      ring.info('dashboard.login', `Dashboard login: ${String(username).trim()} (${role})`);
+      try { AUD.log('owner', role === 'readonly' ? 'login.readonly' : 'login', `${role === 'readonly' ? 'Read-only' : 'Full'} session from ${req.ip}`); } catch { }
+      loginAlert(role, req);
+      req.session.save((saveErr) => {
+        if (saveErr) { tokens.delete(token); return res.status(500).json({ok:false,error:'Could not save session.'}); }
+        if (wantsJson) return res.json({ ok: true, token, role });
+        res.redirect('/admin');
+      });
+    });
   });
-  app.post('/logout', (req, res) => { req.session.destroy(() => res.redirect('/login')); });
+  app.post('/logout', (req, res) => {
+    revokeSessionTokens(req.sessionID);
+    const h = String(req.get('authorization') || '');
+    for (const client of sseClients) if (client.authSessionId === req.sessionID || (h.startsWith('Bearer ') && client.authToken === h.slice(7))) client.end();
+    if (h.startsWith('Bearer ')) tokens.delete(h.slice(7));
+    req.session.destroy(() => { res.clearCookie('connect.sid'); res.redirect('/login'); });
+  });
 
   /* ---- v7.6.0 (R24): SSE live updates — the dashboard reacts the moment something happens ---- */
-  const sseClients = new Set();
   const sseLast = {};
   function ssePush(type, data, minGapMs) {
     const now = Date.now();
@@ -196,9 +267,11 @@ function build(app) {
   }
   app.get('/events', (req, res) => {
     const h = req.headers.authorization || '';
-    if (!req.session?.authenticated && !(h.startsWith('Bearer ') && tokens.has(h.slice(7)))) return res.status(401).end();
+    if (!req.session?.authenticated && !tokenFor(req)) return res.status(401).end();
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.write('retry: 5000\n\n');
+    res.authSessionId = req.sessionID;
+    res.authToken = h.startsWith('Bearer ') ? h.slice(7) : '';
     sseClients.add(res);
     const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch (e) {} }, 25000);
     req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
@@ -213,11 +286,9 @@ function build(app) {
 
   const api = express.Router();
   api.use(auth);
-  /* 5E (R71): the second (read-only) password opens a session that can LOOK
-     at everything but change nothing. Bearer tokens and the owner API key are
-     always full-access — they are owner tools, not people. */
+  /* Read-only restrictions apply to both sessions and issued bearer tokens. */
   api.use((req, res, next) => {
-    if (req.session?.role === 'readonly' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    if (req.authRole === 'readonly' && (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) || (req.path.startsWith('/backup/') || req.path === '/qr' || /^\/numbers\/[^/]+\/qr$/.test(req.path)))) {
       return res.status(403).json({ ok: false, error: 'Read-only session — sign in with the main dashboard password to make changes.' });
     }
     next();
@@ -225,17 +296,18 @@ function build(app) {
   /* 5E (R71): session introspection — role + when the idle timeout will drop it */
   api.get('/session', (req, res) => res.json({
     ok: true,
-    role: req.session?.role === 'readonly' ? 'readonly' : 'full',
+    role: req.authRole === 'readonly' ? 'readonly' : 'full',
     timeoutMin: Math.min(24 * 60, Math.max(5, parseInt(S.get('session.timeout_min', '120'), 10) || 120))
   }));
 
   /* ---- status + overview ---- */
-  api.get('/status', (req, res) => res.json({ ok: true, ...wa.getStatus() }));
+  const statusFor = req => { const state = wa.getStatus(); return req.authRole === 'readonly' ? { ...state, qr: null } : state; };
+  api.get('/status', (req, res) => res.json({ ok: true, ...statusFor(req) }));
   api.get('/overview', (req, res) => {
     const today = new Date(Date.now() + 5 * 3600e3).toISOString().slice(0, 10);
     const rows = Object.fromEntries(A.day(today).map((r) => [r.status, r.n]));
     res.json({
-      ok: true, wa: wa.getStatus(),
+      ok: true, wa: statusFor(req),
       sources: CH.listActiveSources().length, targets: CH.listActiveTargets().length,
       today: { published: rows.published || 0, skipped: rows.skipped || 0, failed: rows.failed || 0 },
       cloud: require('../persist').enabled(),
@@ -337,7 +409,7 @@ function build(app) {
   }
   api.get('/directory', (req, res) => {
     maybeResolveNames('directory');
-    res.json({ ok: true, list: CH.dirList().map((d) => ({ ...d, name: displayName(d.jid) })), wa: wa.getStatus(), scan: channels.scanStatus() });
+    res.json({ ok: true, list: CH.dirList().map((d) => ({ ...d, name: displayName(d.jid) })), wa: statusFor(req), scan: channels.scanStatus() });
   });
   /* v1.2: owner-triggered name recovery — "my channels show numbers, fix it" */
   api.post('/channels/resolve-names', async (req, res) => {
@@ -469,7 +541,6 @@ function build(app) {
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
   api.delete('/power/scheduler/:id', (req, res) => { power.removeJob(req.params.id); res.json({ ok: true }); });
-  api.patch('/power/scheduler/:id', (req, res) => { power.setJobEnabled(req.params.id, Boolean(req.body?.enabled)); res.json({ ok: true }); });
   api.post('/power/routing', (req, res) => {
     const rules = Array.isArray(req.body?.rules) ? req.body.rules.slice(0, 100).map((r) => ({
       jid: String(r.jid || ''), include: String(r.include || '').slice(0, 300), exclude: String(r.exclude || '').slice(0, 300),
@@ -480,8 +551,8 @@ function build(app) {
   });
   api.post('/power/aipilot', (req, res) => { S.set('power.aipilot.criteria', String(req.body?.criteria || '').slice(0, 500)); res.json({ ok: true }); });
   /* ---- 5J (J7): AI safety screen criteria (the switch itself rides /api/power/toggle) ---- */
-  api.get('/power/aisafety', (req, res) => res.json({ ok: true, criteria: S.get('power.aisafety.criteria', '') }));
-  api.post('/power/aisafety', (req, res) => { S.set('power.aisafety.criteria', String(req.body?.criteria || '').slice(0, 500)); try { AUD.log('owner', 'aisafety.save', `AI safety screen criteria saved (${String(req.body?.criteria || '').length} chars)`); } catch { } res.json({ ok: true }); });
+  api.get('/power/aisafety', (req, res) => res.json({ ok: true, criteria: S.get('power.aisafety.criteria', ''), unavailable: S.get('power.aisafety.unavailable', 'open') }));
+  api.post('/power/aisafety', (req, res) => { S.set('power.aisafety.criteria', String(req.body?.criteria || '').slice(0, 500)); if (['open','review'].includes(req.body?.unavailable)) S.set('power.aisafety.unavailable', req.body.unavailable); try { AUD.log('owner', 'aisafety.save', `AI safety screen criteria saved (${String(req.body?.criteria || '').length} chars)`); } catch { } res.json({ ok: true }); });
   api.post('/power/template', (req, res) => {
     try { const info = templates.saveInfo(req.body || {}); res.json({ ok: true, info, preview: templates.preview() }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
@@ -538,6 +609,11 @@ function build(app) {
     const rows = A.recent(limit).map((r) => ({ ...r, keys: P.keys(r.id), canEdit: pipeline.switches().editposts, source_name: nameFor(r.source_jid) }));
     res.json({ ok: true, list: rows });
   });
+  api.get('/posts/:id/delivery', (req, res) => {
+    const post = require('../db').open().prepare('SELECT source_jid,source_msg_id FROM posts WHERE id=?').get(Number(req.params.id));
+    if (!post) return res.status(404).json({ok:false,error:'Post not found.'});
+    res.json({ok:true,items:require('../delivery-ledger').forSource(post.source_jid,post.source_msg_id)});
+  });
   api.get('/qr', async (req, res) => {
     const st = wa.getStatus();
     if (!st.qr) return res.json({ ok: true, qr: null, status: st.status, detail: st.detail });
@@ -582,6 +658,7 @@ function build(app) {
     const { provider, key, model } = req.body || {};
     const known = ai.state().providers.map((p) => p.id);
     if (provider && !known.includes(String(provider).toLowerCase())) return res.status(400).json({ ok: false, error: 'Unknown provider.' });
+    if (typeof req.body?.contentSharing === 'boolean') { S.set('privacy.ai.content', req.body.contentSharing ? '1' : '0'); AUD.log('owner','privacy.ai',`AI content sharing ${req.body.contentSharing ? 'enabled' : 'disabled'}`); }
     if (provider) ai.setProvider(String(provider).toLowerCase());
     if (key != null) {
       const kp = String(provider || ai.state().provider).toLowerCase();
@@ -1086,7 +1163,7 @@ function build(app) {
       if (items.length < 3) throw new Error('The AI did not return a usable plan — try again (it happens; the model must answer 7 “D1|…” lines).');
       const at = Date.now();
       for (const it of items.slice(0, 7)) {
-        q5.enqueue({ sourceJid: 'plan@bot', sourceMsgId: `plan-${at}-${it.day}`, text: it.text, msgTs: Math.floor(at / 1000), targetJids: targets.map((t) => t.jid) });
+        q5.enqueue({ sourceJid: 'plan@bot', sourceMsgId: `plan-${at}-${it.day}`, text: it.text, msgTs: Math.floor(at / 1000), targetJids: targets.map((t) => t.jid), requireApproval: true });
       }
       try { require('../db').AICHAT.add('assistant', `Planned a 7-day week — ${items.length} drafts are in the Approval Queue for your review.`); } catch { }
       try { AUD.log('owner', 'plan.week', `“Plan my week” created ${items.length} Approval Queue drafts`); } catch { }
@@ -1439,6 +1516,7 @@ function build(app) {
       const doBeautify = Boolean(req.body?.beautify);
       const active = CH.listActiveTargets().map((t) => t.jid);
       const chosen = (Array.isArray(req.body?.targets) ? req.body.targets : []).map(String).filter((j) => active.includes(j));
+      if (Array.isArray(req.body?.targets) && req.body.targets.length && chosen.length !== new Set(req.body.targets.map(String)).size) return res.status(400).json({ok:false,error:'A selected target is missing or paused. Check targets before sending.'});
       if (!text && !imageUrls && !upB64) return res.status(400).json({ ok: false, error: 'Write a post, add an image URL or upload a photo.' });
       if (!active.length) return res.status(400).json({ ok: false, error: 'No active target channels — add one in the Targets tab.' });
       const sock = wa.getSocket();
@@ -1468,10 +1546,9 @@ function build(app) {
       } else {
         content = { text: finalText };
       }
-      const r = await publishMod.publish(content, { sourceJid: 'system:compose', sourceMsgId: `compose-${Date.now()}`, only, hasMedia: Boolean(imageUrls || upB64), norm: finalText.slice(0, 400) });
-      if (!r.sent) throw new Error((r.errors || []).join(' | ').slice(0, 200) || 'Publish failed.');
-      ring.info('compose.sent', `Dashboard post published to ${r.sent} target(s)`);
-      res.json({ ok: true, sent: r.sent, text: finalText });
+      const r = await publishMod.publish(content, { sourceJid: 'system:compose', sourceMsgId: `compose-${crypto.randomUUID()}`, only, hasMedia: Boolean(imageUrls || upB64), norm: finalText.slice(0, 400) });
+      ring.info('compose.sent', `Dashboard post: ${r.sent} accepted, ${r.failed} need attention`);
+      res.json({ ok: true, sent: r.sent, failed:r.failed, complete:r.complete === true, errors:r.errors, text: finalText });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
 
@@ -1997,7 +2074,7 @@ function build(app) {
     headerText: S.get('power.header.text', ''),
     aiPrompt: S.get('ai.prompt', ''),
     aireplyPrompt: S.get('power.aireply.prompt', ''),
-    apiKey: S.get('api.key', ''),
+    apiKey: req.authRole === 'readonly' ? '' : S.get('api.key', ''),
     /* 5A */
     queueDelayMin: S.get('queue.delay.min', '0'),
     crossDedupeWindowMin: S.get('crossdedupe.window.min', '30'),
@@ -2050,7 +2127,12 @@ function build(app) {
 
   /* ---- 5A (v7.7.0): approval queue, live queue, source rules, matrix, latency, undo ---- */
   api.get('/queue', (req, res) => res.json({ ok: true, ...queue5a.liveView() }));
-  api.post('/queue/:id', (req, res) => {
+  api.get('/delivery/review', (req, res) => res.json({ ok:true, items:require('../delivery-ledger').review() }));
+  api.post('/delivery/review/:id', (req, res) => {
+    try { if (req.body?.confirmed !== true) throw new Error('Confirm that you checked the target first.'); res.json({ok:true, result:require('../delivery-ledger').resolve(req.params.id,req.body?.action)}); }
+    catch (err) { res.status(400).json({ok:false,error:err.message}); }
+  });
+  api.post('/queue/:id(\\d+)', (req, res) => {
     const action = String(req.body?.action || '');
     try {
       if (action === 'approve') return res.json({ ok: true, item: queue5a.approve(req.params.id, String(req.body?.note || '')) });
@@ -2126,7 +2208,7 @@ function build(app) {
     const l = power.jobs(); const j = l.find((x) => x.id === req.params.id);
     if (!j) return res.status(404).json({ ok: false, error: 'Job not found.' });
     const b = req.body || {};
-    if (b.enabled !== undefined) power.setJobEnabled(j.id, Boolean(b.enabled));
+    if (b.enabled !== undefined) j.enabled = Boolean(b.enabled);
     if (['once', 'daily', 'weekly', 'weekdays', 'interval'].includes(b.repeat)) j.repeat = b.repeat;
     if (b.repeat === 'weekdays' || b.weekdays != null) j.weekdays = String(b.weekdays || j.weekdays || '1,2,3,4,5').slice(0, 20);
     if (b.repeat === 'interval' || b.intervalMin != null) j.intervalMin = Math.max(1, Math.min(10080, parseInt(b.intervalMin, 10) || j.intervalMin || 30));

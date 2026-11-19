@@ -5,7 +5,7 @@
      network-only — the dashboard is LIVE data; caching it would lie to the
      owner. Offline, the shell opens and says the network is down. */
 'use strict';
-const VERSION = 'raqifluz-5g-v1';
+const VERSION = 'raqifluz-secure-v3';
 const SHELL = '/sw.js';
 const STATIC = ['/manifest.webmanifest', '/app.js', '/app.css', '/pwa/icon-192.png', '/pwa/icon-512.png'];
 

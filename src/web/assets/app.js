@@ -70,7 +70,8 @@ const agoLabel = (ts) => {
 };
 
 let TOKEN = '';
-try { TOKEN = localStorage.getItem('rq6-token') || ''; } catch (e) {}
+// Browser sessions use HttpOnly cookies; discard any legacy localStorage bearer.
+try { localStorage.removeItem('rq6-token'); } catch (e) {}
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (opts.body && typeof opts.body === 'object' && Object.prototype.toString.call(opts.body) !== '[object ArrayBuffer]') { headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(opts.body); }
@@ -117,37 +118,39 @@ async function ico(name) {
   return svg;
 }
 
-/* ── 2 · THEME (dark / light / auto, persisted) ─────────────────── */
+/* Appearance: a design identity and an independent colour mode. */
+const DESIGN_ORDER = ['studio', 'mission', 'broadcast'];
+const DESIGN_NAMES = {studio:'Studio Light', mission:'Mission Control', broadcast:'Bold Broadcast'};
 function themeCurrent() {
-  let t = 'dark';
-  try { t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'dark'; } catch (e) {}
-  return t;
+  try { const t = localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme') || 'auto'; return t === 'glass' ? 'dark' : (['light','dark','auto'].includes(t) ? t : 'auto'); } catch (e) { return 'auto'; }
+}
+function designCurrent() {
+  try { const d = localStorage.getItem('rc-design') || ((localStorage.getItem('rc-theme') || localStorage.getItem('rq6-theme')) === 'glass' ? 'mission' : 'studio'); return DESIGN_ORDER.includes(d) ? d : 'studio'; } catch (e) { return 'studio'; }
 }
 function themeApplied(t) { return t === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : t; }
-/* v11 · theme order: dark → light → glass → auto (glass = frosted third theme) */
-const THEME_ORDER = ['dark', 'light', 'glass', 'auto'];
-function setThemeIcon(t) {
+function syncAppearance() {
+  const d = designCurrent(), mode = themeCurrent();
+  document.documentElement.dataset.design = d;
+  document.documentElement.dataset.theme = themeApplied(mode);
+  document.querySelectorAll('[data-design-choice]').forEach(b => { const on = b.dataset.designChoice === d; b.classList.toggle('selected', on); b.setAttribute('aria-pressed', String(on)); });
+  document.querySelectorAll('[data-theme-choice]').forEach(b => { const on = b.dataset.themeChoice === mode; b.classList.toggle('selected', on); b.setAttribute('aria-pressed', String(on)); });
+  const name = DESIGN_NAMES[d];
   const b = $('#themeBtn');
-  if (!b) return;
-  const name = t === 'dark' ? 'sun' : (t === 'light' ? 'moon' : t === 'glass' ? 'sparkles' : 'gauge');
-  const next = THEME_ORDER[(THEME_ORDER.indexOf(t) + 1) % THEME_ORDER.length];
-  b.setAttribute('data-tip', `Theme: ${t} — click for ${next}`);
-  b.title = `Theme: ${t} — click for ${next}`;
-  ico(name).then((s) => { if (b.isConnected) b.innerHTML = s; });
+  if (b) { b.title = 'Design: ' + name + ' — click to change'; b.setAttribute('aria-label', b.title); b.setAttribute('data-tip', b.title); }
+  const quick = $('#designQuick'), label = $('#designQuickLabel');
+  if (quick) { quick.title = 'Design: ' + name + ' — click to change'; quick.setAttribute('aria-label', quick.title); }
+  if (label) label.textContent = ({studio:'Studio',mission:'Mission',broadcast:'Broadcast'})[d];
 }
-(function themeInit() {
-  const t = themeCurrent();
-  document.documentElement.dataset.theme = themeApplied(t);
-  setThemeIcon(t);
-  if (t === 'auto') matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => { document.documentElement.dataset.theme = themeApplied('auto'); });
-})();
-$('#themeBtn').addEventListener('click', () => {
-  const cur = themeCurrent();
-  const next = THEME_ORDER[(THEME_ORDER.indexOf(cur) + 1) % THEME_ORDER.length];
-  try { localStorage.setItem('rc-theme', next); } catch (e) {}
-  document.documentElement.dataset.theme = themeApplied(next);
-  setThemeIcon(next);
-});
+function setDesign(d) { if (!DESIGN_ORDER.includes(d)) return; try { localStorage.setItem('rc-design', d); } catch (e) {} syncAppearance(); }
+function setMode(m) { if (!['light','dark','auto'].includes(m)) return; try { localStorage.setItem('rc-theme', m); } catch (e) {} syncAppearance(); }
+function cycleDesign() { setDesign(DESIGN_ORDER[(DESIGN_ORDER.indexOf(designCurrent()) + 1) % DESIGN_ORDER.length]); }
+syncAppearance();
+ico('sparkles').then(s => { const b = $('#themeBtn'); if (b && b.isConnected) b.innerHTML = s; });
+$('#themeBtn').addEventListener('click', cycleDesign);
+if ($('#designQuick')) $('#designQuick').addEventListener('click', cycleDesign);
+const appearanceMedia = matchMedia('(prefers-color-scheme: light)');
+if (appearanceMedia.addEventListener) appearanceMedia.addEventListener('change', () => { if (themeCurrent() === 'auto') syncAppearance(); });
+else if (appearanceMedia.addListener) appearanceMedia.addListener(() => { if (themeCurrent() === 'auto') syncAppearance(); });
 
 /* ── 2b · 5D (R66) NOTIFICATION CENTER ──────────────────────────── */
 let notifOpen = false;
@@ -272,6 +275,7 @@ function show(view) {
   currentView = view;
   $$('.view').forEach((v) => { v.hidden = v.dataset.view !== view; });
   const area = AREA[view] || 'overview';
+  document.documentElement.dataset.area = area;
   /* v1.1: merged nav items (data-views family) stay lit across their tabs; in-view tab rows track too */
   $$('#sidebar .sb-item').forEach((a) => {
     const fam = a.dataset.views ? a.dataset.views.split(',') : null;
@@ -456,9 +460,7 @@ setInterval(pollStatus, 30000);
     const who = ($('#userName') && $('#userName').textContent) || 'Admin';
     const el = $('#homeGreeting'); if (el) el.textContent = `${part}, ${who}.`;
     const sub = $('#homeSub');
-    if (sub) sub.textContent = (window.__waStatus && window.__waStatus !== 'open')
-      ? 'Link WhatsApp to start mirroring — one scan, and it is never needed again.'
-      : 'Your broadcast desk is operating normally. Here is the signal across your channels.';
+    if (sub) sub.textContent = 'Monitor your connection, channels, and publishing activity.';
   }
   /* Home reference panels — real data from /api/overview, /api/queue, /api/health */
   window.sdPaintHomePanels = async (ov) => {
@@ -513,7 +515,7 @@ setInterval(pollStatus, 30000);
         } else {
           hp.innerHTML = `
             ${chip}
-            <p class="panel-copy">No failure spike right now — posts flow at the normal rate. The controller adds a gap automatically after repeated failures and never drops a post.</p>
+            <p class="panel-copy">No failure spike right now — posts flow at the normal rate. The controller adds a gap after repeated failures; inspect failed and uncertain sends in the queue.</p>
             <div class="pacing-meter"><span style="width:0%"></span></div>
             <div class="meter-labels"><span>Conservative</span><span>Current</span><span>Maximum</span></div>${stats}`;
         }
@@ -557,24 +559,12 @@ setInterval(pollStatus, 30000);
     const item = $$('.sb-item').find((a) => a.dataset.view === view);
     if (item) item.click();
   });
-  /* theme radios (Workspace & language) share the sidebar theme cycle */
-  function syncThemeRadios() {
-    const t = (function () { try { return localStorage.getItem('rc-theme') || 'dark'; } catch (e) { return 'dark'; } })();
-    $$('#themeRadios [data-theme-choice]').forEach((b) => b.classList.toggle('selected', b.dataset.themeChoice === t));
-  }
+  /* Appearance settings and quick switch stay in sync. */
   const tr = $('#themeRadios');
-  if (tr) {
-    syncThemeRadios();
-    tr.addEventListener('click', (e) => {
-      const b = e.target.closest('[data-theme-choice]'); if (!b) return;
-      const next = b.dataset.themeChoice;
-      try { localStorage.setItem('rc-theme', next); } catch (err) {}
-      const applied = next === 'auto' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : next;
-      document.documentElement.dataset.theme = applied;
-      syncThemeRadios();
-      setThemeIcon(next); /* refresh the sidebar glyph — same state the sidebar button uses */
-    });
-  }
+  if (tr) tr.addEventListener('click', e => { const b = e.target.closest('[data-theme-choice]'); if (b) setMode(b.dataset.themeChoice); });
+  const dr = $('#designRadios');
+  if (dr) dr.addEventListener('click', e => { const b = e.target.closest('[data-design-choice]'); if (b) setDesign(b.dataset.designChoice); });
+  syncAppearance();
   /* sidebar collapse lives in the shell IIFE above (reuses the persisted rail state) */
   /* greeting + first paint of the Home panels/chart (loaders.home refills on visit) */
   greet();
@@ -1112,15 +1102,21 @@ function paintPauseBar(paused, waStatus) {
   bar.classList.toggle('paused', Boolean(paused));
   bar.classList.toggle('wa-off', unlinked);
   const head = $('#pauseHead'), sub = $('#pauseSub'), btn = $('#pauseBtn');
+  const status = $('#homeState');
+  if (status) {
+    const text = status.querySelector('span');
+    if (text) text.textContent = unlinked ? 'Connection needed' : paused ? 'Mirroring paused' : 'WhatsApp connected';
+    status.classList.toggle('needs-attention', unlinked || Boolean(paused));
+  }
   if (unlinked) {
     head.textContent = 'Mirroring paused — WhatsApp disconnected.';
-    sub.textContent = 'Link WhatsApp to start mirroring — one scan, and it is never needed again.';
+    sub.textContent = 'Link WhatsApp to start mirroring.';
     btn.dataset.mode = 'link';
     btn.className = 'btn btn-p';
     ico('chat').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Connect WhatsApp via QR</span>'; });
   } else if (paused) {
     head.textContent = 'Mirroring is PAUSED.';
-    sub.textContent = 'No posts are published while paused. Nothing is lost — missed posts are recovered when you resume.';
+    sub.textContent = 'Publishing is paused. Check the queue and source history after you resume.';
     btn.dataset.mode = 'pause';
     btn.className = 'btn btn-p';
     ico('play').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Resume mirroring</span>'; });
@@ -1142,13 +1138,13 @@ $('#pauseBtn').addEventListener('click', async () => {
   }
   const next = !$('#pauseBar').classList.contains('paused');
   if (next) {
-    const ok = await confirmModal('Pause all mirroring?', 'Sources stay subscribed — nothing is published until you resume. Missed posts are recovered when you resume.', 'Pause', true);
+    const ok = await confirmModal('Pause all mirroring?', 'Sources stay subscribed. Check the queue and source history after resuming.', 'Pause', true);
     if (!ok) return;
   }
   try {
     const r = await api('/api/mirror/pause', { method: 'POST', body: { paused: next } });
     paintPauseBar(r.paused, window.__waStatus || 'open');
-    toast(r.paused ? 'Mirroring paused' : 'Mirroring resumed — recovering missed posts', r.paused ? '' : 'ok');
+    toast(r.paused ? 'Mirroring paused' : 'Mirroring resumed', r.paused ? '' : 'ok');
   } catch (e) { toast(e.message, 'err'); }
 });
 function cloudTestWire(root) {
@@ -1173,11 +1169,11 @@ function cloudBanner(cs) {
   if (!cs) { box.innerHTML = ''; return; }
   if (!cs.enabled) {
     box.innerHTML = `<div class="card cloud-note bad">
-      <b>Cloud memory is OFF — that is why every deploy asks for a QR scan again.</b>
+      <b>Cloud memory is off — protect your data before deploying.</b>
       <p class="muted tiny" style="margin:6px 0 0">Cloud memory saves this bot's WhatsApp login to your GitHub repo and reloads it before connecting.
       Turn it on once: Heroku → Settings → Config Vars → add <code>PERSIST_GITHUB_REPO</code> (your-user/your-repo),
       <code>PERSIST_GITHUB_TOKEN</code> (GitHub token with repo access) and optionally <code>PERSIST_GITHUB_BRANCH</code>=bot-state.
-      After one more deploy: scan a QR once, and from then on no deploy will ever ask again.</p>
+      Use a private repository and test sync and recovery. Cloud sync reduces restart risk but does not guarantee recovery.</p>
       <div style="margin-top:8px"><button class="btn btn-sm" id="cloudTest">Test cloud memory</button></div>
       <div id="cloudVerdict" class="tiny" style="margin-top:6px"></div></div>`;
     cloudTestWire(box);
@@ -1186,7 +1182,7 @@ function cloudBanner(cs) {
   /* v1.1: clean badge in the banner — repo/branch/interval detail moves to the tooltip */
   const whenTxt = cs.lastSyncAt ? when(cs.lastSyncAt) : 'not synced yet';
   const tip = (cs.repoUsed || cs.repo) + ' · branch ' + cs.branch + ' · saves every ' + cs.intervalMin + ' min + right after pairing + on every deploy' +
-    (cs.lastKB ? ' · last snapshot ' + cs.lastKB + ' KB' : '') +
+    (cs.lastKB ? ' · last snapshot ' + cs.lastKB + ' KB' : '') + ' · queued media ' + (cs.heldMediaIncluded ? 'included' : 'excluded') +
     (cs.credsPresent ? ' · saved login detected' : ' · no saved login yet — scan one QR and it is stored automatically') +
     (cs.lastError ? ' · last sync error: ' + cs.lastError : '');
   const synced = cs.lastSyncAt ? 'Synced' : 'Armed';
@@ -1204,6 +1200,19 @@ loaders.home = async () => {
   const hFail = hB.map((b) => b.failed || 0);
   const wa = ov.wa || {};
   paintPauseBar(Boolean(ov.mirrorPaused), wa.status);
+  /* A concise, action-oriented status brief built only from live overview data. */
+  const brief = $('#opsBriefItems');
+  if (brief) {
+    const connected = wa.status === 'open';
+    const checks = [
+      { title:'Connection', value:connected ? 'Connected' : 'Needs connection', detail:connected ? 'WhatsApp is ready.' : 'Link WhatsApp to publish and sync.', view:'whatsapp', action:connected ? 'Open inbox' : 'Connect', ok:connected },
+      { title:'Channels', value:`${ov.sources} sources · ${ov.targets} targets`, detail:ov.sources && ov.targets ? 'Routing is ready to configure.' : 'Add a source and a target to start.', view:'sources', action:'Manage channels', ok:Boolean(ov.sources && ov.targets) },
+      { title:'Approval queue', value:`${(ov.queue && ov.queue.pending) || 0} pending`, detail:(ov.queue && ov.queue.pending) ? 'Review items waiting for a decision.' : 'No posts waiting for approval.', view:'approvals', action:'Open queue', ok:!(ov.queue && ov.queue.pending) },
+      { title:'Cloud memory', value:ov.cloud ? 'Enabled' : 'Not configured', detail:ov.cloud ? 'Check sync status and backups.' : 'Configure durable backups before deployment.', view:'settings', action:'Open settings', ok:Boolean(ov.cloud) }
+    ];
+    brief.innerHTML = checks.map(c => `<div class="ops-item"><div class="ops-item-top"><span class="ops-dot ${c.ok ? 'is-ok' : 'is-attention'}" aria-hidden="true"></span><span>${esc(c.title)}</span></div><strong>${esc(c.value)}</strong><p>${esc(c.detail)}</p><button class="ops-link" type="button" data-goview="${c.view}">${esc(c.action)} <span aria-hidden="true">↗</span></button></div>`).join('');
+  }
+
   const nextJob = ((pw && pw.scheduler) || []).filter((j) => j.enabled).sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
   /* 5J (J5): KPIs are draggable — the order is saved (ui.kpi.order) */
   const kpiDefs = [
@@ -1606,7 +1615,7 @@ const SWITCHES = {
   linktools: { name: 'Link cleanup', desc: 'Strip tracking params (utm_*, fbclid, gclid…) from URLs in the final post text — everything else stays untouched' },
   announcard: { name: 'Announcement cards', desc: 'Make a branded 1080×1080 PNG card (with SVG source) from any post — a manual tool, never auto-attached' },
   /* 5J (J7) — every new automation OFF by default (R8) */
-  aisafety: { name: 'AI safety screen', desc: 'An AI criteria review of the FINAL text before routing — e.g. "no political content". Fail-open: if the AI is down the post publishes as usual' }
+  aisafety: { name: 'AI safety screen', desc: 'An AI criteria review of the FINAL text before routing — e.g. "no political content". Choose whether unavailable AI lets the post through or holds it for review' }
 };
 /* Meridian 2 — one home per switch (the 33-switch table, verbatim):
    General: dedupe family + smart media · Brand: the formatting switches · Pilot: aipilot/scheduler/evergreen/autopilot
@@ -1886,8 +1895,17 @@ loaders.approvals = async () => {
   await ensureSwitches();
   const d = await api('/api/queue');
   const pending = d.pending || [];
+  const review = await api('/api/delivery/review');
+  const items = review.items || [];
+  $('#deliveryReviewCount').textContent = items.length;
+  $('#deliveryReview').innerHTML = items.length ? items.map(x => `<div class="lg-i"><span><b>${esc(x.target_jid)}</b> · part ${Number(x.part)+1}<br><small>${esc(x.state)} · ${esc(x.detail || 'interrupted')} · ${esc(x.updated_at)}</small><br><small>Source: ${esc(x.source_jid)} · ${esc(x.source_msg_id)} ${x.provider_id ? '· ID: ' + esc(x.provider_id) : ''}</small></span><span class="ra"><button class="btn btn-sm" data-review="${x.id}" data-action="accepted">Mark accepted</button><button class="btn btn-sm btn-d" data-review="${x.id}" data-action="retry">Allow retry</button></span></div>`).join('') : '<p class="muted tiny">No uncertain sends recorded.</p>';
+  $$('#deliveryReview [data-review]').forEach(b => b.addEventListener('click', async () => {
+    const retry = b.dataset.action === 'retry';
+    if (!await confirmModal(retry ? 'Allow this part to be sent again?' : 'Mark this part accepted?', retry ? 'Check the destination first. Retrying can create a duplicate. After this, retry the failed item or let its schedule run.' : 'Check the destination first. This prevents another automatic send; it does not prove delivery.', retry ? 'Allow retry' : 'Mark accepted', true)) return;
+    try { await api('/api/delivery/review/' + b.dataset.review, {method:'POST',body:{action:b.dataset.action,confirmed:true}}); toast('Review saved','ok'); loaders.approvals(); } catch(e) { toast(e.message,'err'); }
+  }));
   const qBadge = $('#queueBadge'); qBadge.hidden = !pending.length; qBadge.textContent = pending.length;
-  const lBadge = $('#liveBadge'); const ln = d.failed.length + d.processing;
+  const lBadge = $('#liveBadge'); const ln = d.failed.length + d.processing + items.length;
   lBadge.hidden = !ln; lBadge.textContent = ln;
   $('#queueDelay').value = d.delayMin || 0;
   $('#pendingCount').textContent = pending.length;
@@ -1943,7 +1961,7 @@ loaders.approvals = async () => {
       try {
         const qid = await queueIdForPost(b.dataset.fr);
         if (qid != null) { await api('/api/queue/' + qid, { method: 'POST', body: { action: 'retry' } }); toast('Retrying', 'ok'); }
-        else toast('No queue copy for that post — use “Retry all failed” to re-feed it', '');
+        else { await api('/api/posts/retry-one', {method:'POST',body:{id:b.dataset.fr}}); toast('Retrying through the pipeline','ok'); }
       } catch (e) { toast(e.message, 'err'); }
       b.disabled = false;
       loaders.approvals().catch(() => { });
@@ -1961,7 +1979,7 @@ loaders.approvals = async () => {
     }));
   } else {
     const s = await ico('check').catch(() => '');
-    failedBox.innerHTML = `<div class="es">${s}<div class="es-t">No failed posts</div><div class="es-s">Failures stay here until you retry or dismiss them — nothing is ever dropped silently.</div></div>`;
+    failedBox.innerHTML = `<div class="es">${s}<div class="es-t">No failed posts</div><div class="es-s">Failures stay here until retried or dismissed; check delivery review before retrying.</div></div>`;
   }
   let rec = null; try { rec = JSON.parse(d.recovery || 'null'); } catch (e) { }
   $('#recoveryNote').textContent = rec ? `Last boot recovery pass (${when(rec.at)}): ${rec.fed || 0} missed post(s) re-fed → ${rec.recovered || 0} published, ${rec.queued || 0} queued, ${rec.failed || 0} failed, ${rec.skipped || 0} skipped.` : 'Recovery results appear here after the bot reconnects and runs its catch-up pass.';
@@ -1969,6 +1987,8 @@ loaders.approvals = async () => {
 async function queueIdForPost(postId) {
   try {
     const [d, posts] = await Promise.all([api('/api/queue'), api('/api/posts?limit=200')]);
+    const failed = (d.failed || []).find(p => String(p.id) === String(postId));
+    if (failed && failed.queue_id != null) return failed.queue_id;
     const row = (posts.list || []).find((p) => String(p.id) === String(postId));
     if (!row) return null;
     for (const list of [d.pending, d.approved]) {
@@ -1996,7 +2016,7 @@ loaders.power = async () => {
   };
   $('#schedTable tbody').innerHTML = (p.scheduler || []).map((j) => `
     <tr data-id="${esc(j.id)}">
-      <td><b>${esc(j.name || j.text.slice(0, 40) + '…')}</b><div class="muted tiny">${esc(j.text.slice(0, 80))}…</div></td>
+      <td><b>${esc(j.name || j.text.slice(0, 40) + '…')}</b><div class="muted tiny">${esc(j.text.slice(0, 80))}…</div>${j.lastError ? `<div class="tiny">Needs attention: ${esc(j.lastError)}</div>` : ''}</td>
       <td class="ch-jid">${shortJid(j.jid)}</td>
       <td class="tiny num">${when(j.at)}</td>
       <td class="tiny">${repeatLabel(j)}</td>
@@ -2570,9 +2590,14 @@ $('#composeSend').addEventListener('click', async () => {
   $('#composeResult').textContent = 'Publishing…';
   try {
     const r = await api('/api/compose', { method: 'POST', body: { text, imageUrl, beautify: $('#composeBeautify').checked, targets, imageB64: composeUpload ? composeUpload.b64 : '', imageMime: composeUpload ? composeUpload.mime : '' } });
-    $('#composeResult').textContent = `Published to ${r.sent} target(s)`;
-    toast('Post published', 'ok');
-    $('#composeText').value = ''; $('#composeImage').value = ''; composeUpload = null; $('#composeUploadClear').hidden = true; composeRefresh();
+    if (!r.complete) {
+      $('#composeResult').textContent = `Needs review: ${r.sent} part(s) accepted; ${r.failed} issue(s). Check Approval queue → Live before any retry. ${(r.errors || []).join(' | ')}`;
+      toast('Send incomplete or uncertain — check Delivery review before retrying', 'err');
+    } else {
+      $('#composeResult').textContent = `Provider accepted ${r.sent} part(s); delivery not confirmed`;
+      toast('Accepted by provider', 'ok');
+      $('#composeText').value = ''; $('#composeImage').value = ''; composeUpload = null; $('#composeUploadClear').hidden = true; composeRefresh();
+    }
   } catch (e) { $('#composeResult').textContent = ''; toast(e.message, 'err'); }
   btn.classList.remove('is-loading');
 });
@@ -2593,6 +2618,7 @@ const postsRowHtml = (p, canEdit) => {
   if (canEdit && (p.status === 'published' || p.status === 'edited') && (p.keys || []).length) acts.push(`<button class="btn btn-sm" data-act="edit" title="Edit the post as it appears on the channel (experimental)">Channel edit</button>`);
   /* 5I (I9): quick-action cluster — the ⋯ menu consolidates ALL of the above
      (plus resend / undo / card) into one place; the plain buttons stay. */
+  acts.push(`<button class="btn btn-sm" data-act="delivery" title="View per-target and per-part outcomes">Delivery</button>`);
   acts.push(`<button class="btn btn-sm btn-g qa-btn" data-act="qa" title="More actions (resend, undo, card…)">⋯</button>`);
   return `
     <tr data-pid="${p.id}" data-sjid="${esc(p.source_jid)}" data-smid="${esc(p.source_msg_id)}" class="rowqa">
@@ -2606,6 +2632,15 @@ const postsRowHtml = (p, canEdit) => {
 };
 /* 5I (I9/I10/I4): the shared action handler for row buttons AND the ⋯ menu. */
 async function handlePostAct(p, act, b) {
+  if (act === 'delivery') {
+    try {
+      const data = await api('/api/posts/' + p.id + '/delivery');
+      const rows = data.items || [];
+      const html = rows.length ? rows.map(x => `<div class="lg-i"><span><b>${esc(x.target_jid)}</b> · part ${Number(x.part)+1}<br><small>${esc(x.detail || '')} ${x.provider_id ? '· ID: ' + esc(x.provider_id) : ''}</small></span><span class="b b-info">${esc(x.state)}</span></div>`).join('') : '<p class="muted tiny">No journal entries. This may be a legacy post or a post not yet sent.</p>';
+      openModal({title:'Delivery details',html:'<p class="muted tiny">Accepted means the provider returned a message ID; delivery is not confirmed. Resolve uncertain items in Approval queue → Live.</p>' + html});
+    } catch(e) { toast(e.message,'err'); }
+    return;
+  }
   if (act === 'qa') {
     openQuickMenu(p, b);
     return;
@@ -4002,6 +4037,7 @@ loaders.settings = async () => {
   $('#apiKeyBox').value = s.apiKey || '';
   AI_PROVIDERS = ai.providers || [];
   window.__aiState = ai;
+  $('#aiContentSharing').checked = !!ai.contentSharing;
   $('#aiProviderCount').textContent = `${AI_PROVIDERS.length} providers`;
   fillAiProviderUi(ai.provider, ai.model);
   $('#aiModelCustom').value = '';
@@ -4125,7 +4161,7 @@ $('#set5aSave').addEventListener('click', async () => {
 $('#aiSave').addEventListener('click', async () => {
   const btn = $('#aiSave'); btn.classList.add('is-loading');
   try {
-    await api('/api/ai', { method: 'POST', body: { provider: $('#aiProvider').value, model: ($('#aiModelCustom').value.trim() || $('#aiModel').value || '').trim(), key: $('#aiKey').value.trim() || undefined } });
+    await api('/api/ai', { method: 'POST', body: { provider: $('#aiProvider').value, model: ($('#aiModelCustom').value.trim() || $('#aiModel').value || '').trim(), key: $('#aiKey').value.trim() || undefined, contentSharing: $('#aiContentSharing').checked } });
     toast('AI settings saved', 'ok');
     loaders.settings();
   } catch (e) { toast(e.message, 'err'); }
@@ -4378,7 +4414,7 @@ $('#aiChatClear').addEventListener('click', async () => {
     { id: 'act-pause', label: 'Pause / resume all mirroring', icon: 'pause', run: () => { const b = $('#pauseBtn'); if (b) b.click(); } },
     { id: 'act-compose', label: 'Compose a new post', icon: 'pen', run: () => show('newpost') },
     { id: 'act-resync', label: 'Re-sync sources & targets now', icon: 'refresh', run: () => resyncChannels(true) },
-    { id: 'act-theme', label: 'Cycle theme (dark / light / auto)', icon: 'sun', run: () => { const b = $('#themeBtn'); if (b) b.click(); } },
+    { id: 'act-theme', label: 'Cycle design style', icon: 'sun', run: () => { const b = $('#themeBtn'); if (b) b.click(); } },
     { id: 'act-robot', label: 'Open the AI assistant', icon: 'robot', run: () => { const b = $('#robotFab'); if (b) b.click(); } },
     { id: 'act-settings-ai', label: 'Settings → AI provider', icon: 'bot', run: () => { show('settings'); setTimeout(() => $('#aiProvider').scrollIntoView({ block: 'center' }), 200); } },
     { id: 'act-settings-cloud', label: 'Settings → Cloud memory', icon: 'cloud', run: () => { show('settings'); setTimeout(() => $('#backupNow').scrollIntoView({ block: 'center' }), 200); } }
@@ -5486,6 +5522,7 @@ async function loadAiSafety() {
     const d = await api('/api/power/aisafety');
     const el = $('#aisafetyInput');
     if (el && document.activeElement !== el) el.value = d.criteria;
+    const mode = $('#aisafetyUnavailable'); if (mode) mode.value = d.unavailable || 'open';
   } catch (e) { /* non-fatal */ }
 }
 loaders.aipilot = (loaders.aipilot || (async () => { }));
@@ -5494,7 +5531,7 @@ loaders.aipilot = async () => { await __aiPilotJ(); loadAiSafety(); };
 {
   const b = $('#aisafetySave');
   if (b) b.addEventListener('click', async () => {
-    try { await api('/api/power/aisafety', { method: 'POST', body: { criteria: $('#aisafetyInput').value } }); toast('Safety rule saved', 'ok'); }
+    try { await api('/api/power/aisafety', { method: 'POST', body: { criteria: $('#aisafetyInput').value, unavailable: $('#aisafetyUnavailable').value } }); toast('Safety rule saved', 'ok'); }
     catch (e) { toast(e.message, 'err'); }
   });
 }
