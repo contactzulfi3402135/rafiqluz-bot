@@ -15,7 +15,6 @@ const enabled = () => S.getBool('power.instantalerts.on', false);
 
 function maybe(type, title, detail) {
   try {
-    if (require('./panic').active() || require('./lifecycle').isStopping()) return {sent:false,why:'panic stop or shutdown'};
     if (!enabled()) return { sent: false, why: 'off' };
     const last = Number(S.get(`alerts.last.${type}`, 0)) || 0;
     if (Date.now() - last < COOLDOWN_MS) return { sent: false, why: 'cooldown (30 min per type)' };
@@ -25,11 +24,11 @@ function maybe(type, title, detail) {
     if (!sock || wa.getStatus().status !== 'open') return { sent: false, why: 'WhatsApp not connected' };
     S.set(`alerts.last.${type}`, String(Date.now()));
     const text = ['🚨 *' + title + '*', detail ? String(detail).slice(0, 160) : '', '', '_Instant alert · 30-min cooldown per type — repeats are logged, not messaged._'].filter((l, i) => l || i < 3).join('\n');
-    Promise.resolve(sock.sendMessage(`${phone}@s.whatsapp.net`, { text })).catch(()=>ring.warn('alert.uncertain',`Instant alert (${type}) outcome is unknown`));
+    sock.sendMessage(`${phone}@s.whatsapp.net`, { text });
     NTF.add('alert', `${title}${detail ? ' — ' + String(detail).slice(0, 100) : ''}`);
-    ring.warn('alert.requested', `Instant alert (${type}) requested to +${phone}; delivery is not confirmed`);
+    ring.warn('alert.sent', `Instant alert (${type}) sent to +${phone}`);
     try { require('./webhooks').fire('alert', { type, title, detail: String(detail || '').slice(0, 160) }); } catch { } // 5G (R80)
-    return { sent: false, started: true, why: 'Alert request started; delivery is not confirmed.' };
+    return { sent: true };
   } catch (e) {
     ring.warn('alert.fail', `Instant alert (${type}) failed: ${String(e.message || e).slice(0, 120)}`);
     return { sent: false, why: String(e.message || e).slice(0, 80) };

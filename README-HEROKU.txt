@@ -34,10 +34,8 @@ NEW HEROKU INSTALL
 3. Optional GitHub cloud snapshots: set PERSIST_GITHUB_REPO to owner/private-repo,
    PERSIST_GITHUB_TOKEN to a fine-grained Contents read/write token for that repo,
    and PERSIST_GITHUB_BRANCH to a dedicated state branch. This explicitly sends database contents and linked-device credentials to that
-   private repository. Queued media and saved inbox media are excluded unless
-   you explicitly set PERSIST_HOLD_MEDIA=1 and PERSIST_INBOX_MEDIA=1. Media
-   can contain private messages and increase snapshot size. Protect access;
-   rotate exposed credentials. If not configured,
+   private repository. Queued media is excluded unless you also opt in by
+   setting PERSIST_HOLD_MEDIA=1; media may be sensitive and increase snapshot size. Protect its access; rotate exposed credentials. If not configured,
    no GitHub snapshot is created.
 4. Run ONE web dyno (`heroku ps:scale web=1`), open the app, sign in, and connect
    WhatsApp from the authenticated dashboard. Add sources/targets and test with
@@ -55,27 +53,12 @@ IMPORTANT HEROKU LIMITS
   stale snapshots, external changes and retries can still cause duplicates or
   missing messages. Accepted by a provider does not mean delivered. Check the
   target before resolving an uncertain outcome or allowing a retry.
-• If cloud recovery cannot be verified on startup, cloud writes are blocked.
-  If the local database or linked session is missing, startup stops to protect
-  the remote copy. Check logs and the recovery guide before restarting.
 • GitHub storage and archive limits apply. Large media, unavailable APIs, token
   expiry or failed snapshots can prevent recovery. A dashboard DB backup only
   has media references, not the media or linked-device session files.
 • Dyno sleeping, uptime and self-ping are subject to Heroku policy; self-ping
   does not guarantee availability. Test restores and reconnects regularly.
 
-EMAIL AND RECOVERY
-Email uses a local single-instance queue; interrupted sends require review rather
-than automatic replay. Complete backups are sensitive and are not encrypted by the dashboard.
-SMTP passwords are plaintext by default; optional protection and migration are
-explained in EMAIL-CREDENTIAL-PROTECTION.md. Read EMAIL-OPERATIONS.md first.
-For optional offline encryption of a downloaded backup, see ENCRYPTED-BACKUPS.md.
-See CHANNEL-OPERATIONS.md for channel edit and deletion safety limitations.
-
 LOCAL TEST
 Use Node 24: `npm ci` then `npm test`. See RELEASE-11.5.md for changes and test
 scope. Do not run mutation/integration tests against a production app.
-
-SINGLE INSTANCE: current versions have a cooperative local filesystem guard.
-It cannot coordinate separate Heroku dynos or older instances. Run one instance
-and follow PERSISTENT-DEPLOYMENT.md; do not delete active lock files.

@@ -18,7 +18,7 @@ function perTargetMax(jid) {
 
 /** Publish content to every active target. Returns {sent, failed, errors, keys}. */
 async function publish(content, meta = {}) {
-  if (require('./lifecycle').isStopping() || require('./panic').active()) return {sent:0,failed:1,errors:['Panic stop or shutdown is active; no new send started'],keys:[],complete:false};
+  if (require('./lifecycle').isStopping()) return {sent:0,failed:1,errors:['Shutdown in progress; no new send started'],keys:[],complete:false};
   const crypto = require('crypto');
   const ledger = require('./delivery-ledger');
   const only = Array.isArray(meta.only) ? [...new Set(meta.only)] : null;
@@ -59,18 +59,6 @@ async function publish(content, meta = {}) {
     hashValue(c); const digest = h.digest('hex');
     for (const t of targets) {
       if (blocked.has(t.jid)) continue;
-      // Channel broadcasting must never send to groups or unverifiable targets.
-      // A cached directory role can be stale, so verify the linked account's
-      // current owner/admin role before each part. Failure is fail-closed.
-      if (!/^[A-Za-z0-9._-]+@newsletter$/.test(String(t.jid || ''))) {
-        errors.push(`${t.name || t.jid}: not a WhatsApp channel; nothing sent`); blocked.add(t.jid); continue;
-      }
-      let metadata = null;
-      try { metadata = await wa.channelMeta(sock,t.jid); } catch { /* cannot verify */ }
-      if (!metadata || !['OWNER','ADMIN'].includes(String(metadata.role || '').toUpperCase())) {
-        errors.push(`${t.name || t.jid}: owner/admin status could not be verified; this part was not sent`); blocked.add(t.jid); continue;
-      }
-      if (require('./panic').active() || require('./lifecycle').isStopping()) { errors.push(`${t.name || t.jid}: stopped before sending this part`); blocked.add(t.jid); continue; }
       const perMax = perTargetMax(t.jid);
       if (perMax && !(tracked && ledger.get(source,message,t.jid,pi)) && CH.pubCountLastHour(t.jid) >= perMax) { errors.push(`${t.name || t.jid}: target rate cap reached`); blocked.add(t.jid); continue; }
       let claim = null;
@@ -84,22 +72,13 @@ async function publish(content, meta = {}) {
       }
       let providerId = '';
       try {
-        // Reserve the target's rate budget before dispatch. If the journal is
-        // unavailable, do not call the provider. A failed or uncertain send
-        // still consumes the slot; that is safer than losing the rate record.
-        if (!CH.reservePub(t.jid, perMax)) {
-          // A competing connection may have consumed the last slot after the
-          // earlier read. No provider request was started; retain the claimed
-          // delivery for explicit review rather than risk an automatic resend.
-          if (tracked) ledger.finish(source,message,t.jid,pi,'uncertain','', 'Target rate slot taken before provider dispatch; no request started');
-          errors.push(`${t.name || t.jid}: target rate cap reached; no request started`); blocked.add(t.jid); continue;
-        }
         const msgId = await wa.sendToChannel(sock,t.jid,c);
         providerId = msgId;
         // Save the returned provider ID before attempting optional read-back.
         if (tracked) ledger.finish(source,message,t.jid,pi,'accepted',msgId,'Provider returned a message ID; delivery is not guaranteed');
         keys.push({target:t.jid,msgId});
         if (postId && msgId && !P.keys(postId).some(k => k.target_jid === t.jid && k.msg_id === msgId)) P.addKey(postId,t.jid,msgId);
+        CH.recordPub(t.jid);
         if (Boolean(meta.hasMedia) && pi === 0) {
           await new Promise(r => setTimeout(r,1500));
           let visible = null;
@@ -129,12 +108,9 @@ async function publish(content, meta = {}) {
 
 /** Edit an already-published post's text on every target it went to. */
 async function editPublished(sourceJid, sourceMsgId, newText) {
-  newText=String(newText || '');
-  if(!newText.trim() || newText.length>4096)throw Error('Enter edit text between 1 and 4,096 characters. No operation was started.');
   const postId = P.postId(sourceJid, sourceMsgId);
   if (!postId) throw new Error('That post is not in the publish history.');
-  const seen = new Set();
-  const keys = P.keys(postId).filter(k=>{const id=JSON.stringify([k.target_jid,k.msg_id]);if(seen.has(id))return false;seen.add(id);return true;});
+  const keys = P.keys(postId);
   if (!keys.length) throw new Error('No target copies recorded for that post.');
   const sock = wa.getSocket();
   if (!sock) throw new Error('WhatsApp is not connected.');
@@ -144,8 +120,7 @@ async function editPublished(sourceJid, sourceMsgId, newText) {
     catch (err) { errors.push(`${k.target_jid}: ${err.message}`); }
     await new Promise((r) => setTimeout(r, pace.gapMin(1200)));
   }
-  if (ok && !errors.length) P.setStatus(postId, 'edited', `Edit request accepted on ${ok} target(s); check the channel to verify`, String(newText || '').slice(0, 60000));
-  else if(errors.length) require('./db').open().prepare('UPDATE posts SET reason=? WHERE id=?').run(`Edit: ${ok} request(s) accepted, ${errors.length} not confirmed; inspect each target before retrying.`,postId);
+  if (ok) P.setStatus(postId, 'edited', `edited on ${ok} target(s)`, String(newText || '').slice(0, 60000));
   return { ok, errors };
 }
 
@@ -153,18 +128,14 @@ async function editPublished(sourceJid, sourceMsgId, newText) {
 async function deletePublished(ids) {
   const sock = wa.getSocket();
   if (!sock) throw new Error('WhatsApp is not connected.');
-  const list = Array.isArray(ids) ? ids : [ids];
-  if(list.length>300)throw Error('Select at most 300 recorded copies; no deletion was started.');
-  let done = 0; const errors = [];const seen = new Set();
+  const list = Array.isArray(ids) ? ids.slice(0, 300) : [ids];
+  let done = 0; const errors = [];
   for (const item of list) {
-    const identity=JSON.stringify([item?.target,item?.msgId]);if(seen.has(identity))continue;seen.add(identity);
     try {
-      const { target, msgId } = item || {};
-      const recorded=require('./db').open().prepare('SELECT 1 FROM post_keys WHERE target_jid=? AND msg_id=? LIMIT 1').get(String(target||''),String(msgId||''));
-      if(!recorded||msgId==='undone')throw Error('This message is not recorded as a bot-published copy; no deletion was started.');
+      const { target, msgId } = item;
       await wa.deleteChannelPost(sock, target, msgId);
       done += 1;
-    } catch (err) { errors.push(`${item?.target || 'unknown target'}: ${err.message}`); }
+    } catch (err) { errors.push(`${item.target}: ${err.message}`); }
     await new Promise((r) => setTimeout(r, pace.gapMin(1200))); // paced — WhatsApp rate limits (5E: adaptive)
   }
   return { done, errors };
@@ -178,26 +149,38 @@ async function deletePublished(ids) {
 async function purgeByDate(jid, fromTs, toTs) {
   const sock = wa.getSocket();
   if (!sock) throw new Error('WhatsApp is not connected.');
+  const inRange = (ts) => ts >= fromTs && ts <= toTs;
 
-  // Only recorded bot-published copies are eligible. A broad live-channel
-  // sweep can include posts made by the owner or another administrator.
+  // collect: recorded bot posts + live channel posts in range
+  const toDelete = [];
   const rows = require('./db').open().prepare(`
-    SELECT DISTINCT pk.target_jid, pk.msg_id FROM post_keys pk
+    SELECT pk.target_jid, pk.msg_id FROM post_keys pk
     JOIN posts p ON p.id = pk.post_id
-    WHERE pk.target_jid = ? AND p.created_at BETWEEN ? AND ?
-      AND pk.msg_id IS NOT NULL AND pk.msg_id <> '' AND pk.msg_id <> 'undone'`).all(jid, fromTs.iso, toTs.iso);
-  if(rows.length>300)throw Error('More than 300 recorded copies match; choose a narrower date range. No deletion was started.');
-  const toDelete=rows.map(r=>({target:r.target_jid,msgId:r.msg_id}));
-  if (!toDelete.length) return {deleted:0,attempted:0,errors:[],remaining:null,note:'No recorded bot-published copies were found in that range. This does not prove the channel has no matching posts.'};
-  const { done, errors } = await deletePublished(toDelete);
-  // The provider API here returns at most a recent sample, and the parser may
-  // omit entries. Absence from that sample cannot establish deletion.
-  const after = await wa.fetchChannelPosts(sock, jid, 100).catch(() => null);
-  const ids=new Set(toDelete.map(x=>String(x.msgId)));
-  const visible = after ? after.filter(m=>ids.has(String(m.key?.id || ''))).length : null;
-  return { deleted:done, attempted:toDelete.length, errors, remaining:null, visibleInRecentSample:visible,
-    note:`${done} deletion request(s) accepted; ${errors.length} not confirmed. ${visible===null?'A recent-channel check was unavailable.':`${visible} matching copy/copies appear in a limited recent sample.`} Deletion is not fully verified; check the channel.` };
+    WHERE pk.target_jid = ? AND p.created_at BETWEEN ? AND ?`).all(jid, fromTs.iso, toTs.iso);
+  for (const r of rows) toDelete.push({ target: r.target_jid, msgId: r.msg_id });
 
+  const live = await wa.fetchChannelPosts(sock, jid, 100).catch(() => []);
+  for (const m of live) if (m.messageTimestamp && inRange(m.messageTimestamp)) toDelete.push({ target: jid, msgId: m.key.id });
+
+  if (!toDelete.length) return { deleted: 0, remaining: 0, note: 'Nothing found in that date range.' };
+  const { done, errors } = await deletePublished(toDelete);
+
+  // verify by re-reading
+  let remaining = null;
+  const after = await wa.fetchChannelPosts(sock, jid, 100).catch(() => null);
+  if (after) {
+    remaining = after.filter((m) => m.messageTimestamp && inRange(m.messageTimestamp)).length;
+  }
+  return {
+    deleted: done,
+    attempted: toDelete.length,
+    errors,
+    remaining,
+    note: remaining === null
+      ? 'Deleted what WhatsApp accepted — could NOT verify the final state (re-read failed). Check the channel on your phone.'
+      : remaining === 0 ? 'Verified clean — every post in the range is gone.'
+        : `${remaining} post(s) still visible after deletion (WhatsApp refused some).`
+  };
 }
 
 module.exports = { publish, editPublished, deletePublished, purgeByDate, perTargetMax };

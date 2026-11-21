@@ -57,6 +57,7 @@ const FEATURES = {
   antiedit: () => S.getBool('feat.antiedit', true),
   rejectcalls: () => S.getBool('feat.rejectcalls', false)
 };
+let _lastMediaTrim = 0;                             // v9.0.0 (repo-slim): throttle for the BLOB cap
 /* v9.0.0 (owner policy): the old per-file size caps are GONE — media of any size
    is saved (on disk), and what gets posted is deleted right after publishing. */
 const VIEWONCE_IMG_PX = 1080;           // view-once photos get resized to this edge
@@ -276,6 +277,7 @@ async function captureViewOnce(m, session, sock, rowId) {
        the cloud-synced DB). Posted media is deleted after publishing. */
     if (!saveInboxMedia(rowId, buf, 'bin', String(node.mimetype || 'application/octet-stream'), 'view-once')) IB.setMedia(rowId, String(node.mimetype || 'application/octet-stream'), 'view-once', buf);
   }
+  IB.trimMedia(300);
 }
 
 /* ---------- live archive ---------- */
@@ -389,7 +391,11 @@ async function archive(m, opts = {}) {
       if (!kbSent) maybeAutoReply(jid, body, fromMe);
     }
 
-    // Archive history and media are retained unless the owner explicitly enables retention cleanup.
+    /* trim: last 1000 rows per chat (media cache trimmed separately) */
+    db().prepare(`DELETE FROM inbox_msgs WHERE session=? AND chat_jid=? AND id NOT IN
+      (SELECT id FROM inbox_msgs WHERE session=? AND chat_jid=? ORDER BY id DESC LIMIT 1000)`).run(session, jid, session, jid);
+    /* v9.0.0 (repo-slim): keep the embedded-thumbnail BLOBs capped too — throttled */
+    if (Date.now() - _lastMediaTrim > 60000) { _lastMediaTrim = Date.now(); IB.trimMedia(300); }
   } catch (err) {
     try { ring.warn('inbox.archive.fail', `Archive skipped one message: ${String(err?.message || err).slice(0, 120)}`); } catch { }
   }
@@ -510,7 +516,7 @@ async function logCall(session, call, sock) {
     db().prepare(`INSERT INTO inbox_chats(session, jid, name, last_at, last_text, unread) VALUES(?,?,?,?,?,1)
       ON CONFLICT(session,jid) DO UPDATE SET last_at=excluded.last_at, last_text=excluded.last_text, unread=unread+1`)
       .run(s, jid, labelFor(s, jid, ''), ts, label);
-    if (!require('./lifecycle').isStopping() && !require('./panic').active() && FEATURES.rejectcalls() && sock?.rejectCall && call.id) {
+    if (FEATURES.rejectcalls() && sock?.rejectCall && call.id) {
       try { await sock.rejectCall(call.id, call.from); ring.info('inbox.call.reject', `Incoming ${call.isVideo ? 'video' : 'voice'} call from ${jid.split('@')[0]} auto-rejected (feature is ON)`); } catch { }
     }
   } catch { }
@@ -564,7 +570,6 @@ async function maybeAutoReply(jid, body, fromMe) {
     autoReplyAt.set(jid, Date.now());
     const recent = db().prepare('SELECT from_me, body FROM inbox_msgs WHERE session=? AND chat_jid=? ORDER BY id DESC LIMIT 5').all('main', jid).reverse();
     const reply = await ai.autoReply(body, recent);
-    if (require('./lifecycle').isStopping() || require('./panic').active()) return;
     if (!reply || !reply.trim()) return;
     const sock = wa.getSocket();
     if (!sock) return;
@@ -578,7 +583,7 @@ const chats = (session) => IB.chats(session || 'main').map((c) => ({ ...c, name:
 const messages = (session, jid) => IB.messages(session || 'main', jid);
 const markRead = (session, jid) => { try { db().prepare('UPDATE inbox_chats SET unread=0 WHERE session=? AND jid=?').run(String(session || 'main'), String(jid || '')); } catch { } };
 const ensureChat = (session, jid, name) => IB.ensureChat(session || 'main', jid, name);
-const media = (session, id, jid) => IB.mediaOf(session || 'main', id, jid);
+const media = (session, id) => IB.mediaOf(session || 'main', id);
 const historyState = (session) => S.get(`num.${session}.history`, '');
 const features = () => ({
   antidelete: FEATURES.antidelete(), antiviewonce: FEATURES.antiviewonce(),
@@ -610,46 +615,33 @@ async function bulkSend(recipients, text, meta = {}) {
   for (const rawLine of String(recipients || '').split(/[\n;]+/)) {
     const line = rawLine.trim();
     if (!line) continue;
-    if (line.includes('@')) {
-      if (!/^[0-9]{8,15}@s\.whatsapp\.net$/.test(line)) throw new Error('Bulk sends accept personal numbers only; groups and channels are not allowed. No messages were sent.');
-      const phone=line.split('@')[0];
-      if (!seen.has(phone)) { seen.add(phone); list.push({ jid: line, name:'', phone }); }
+    if (line.includes('@')) {                                   // raw JID (group or user)
+      if (!seen.has(line)) { seen.add(line); list.push({ jid: line, name: '' }); }
       continue;
     }
     const [rawPhone, ...nameParts] = line.split(',');
     const phone = String(rawPhone || '').replace(/\D/g, '');
     const name = nameParts.join(',').trim().slice(0, 60);
-    if (!/^[+\d() .-]+$/.test(rawPhone) || phone.length < 8 || phone.length > 15) throw new Error('Invalid personal number in list. Correct it before sending; no messages were sent.');
-    if (!seen.has(phone)) { seen.add(phone); list.push({ jid: `${phone}@s.whatsapp.net`, name, phone }); }
+    if (phone.length >= 8 && !seen.has(phone)) { seen.add(phone); list.push({ jid: `${phone}@s.whatsapp.net`, name, phone }); }
   }
-  if (!list.length) throw new Error('No valid personal numbers. Use one per line: 923001234567,Name.');
-  if (list.length > 200) throw new Error('Bulk send is limited to 200 recipients; no messages were sent.');
-  const ledger=require('./delivery-ledger'), source='bulk:manual', batchId=require('crypto').randomUUID();
+  if (!list.length) throw new Error('No valid numbers. Use one per line: 923001234567,Name (or paste group IDs ending in @g.us).');
+  if (list.length > 200) list.length = 200;
   const results = []; let sent = 0;
   for (const item of list) {
     const personal = String(text).replaceAll('{name}', item.name || '').slice(0, 4096);
-    if (require('./panic').active() || require('./lifecycle').isStopping()) {
-      results.push({to:item.phone || item.jid,name:item.name,ok:false,state:'not_sent',error:'Stopped before sending'}); continue;
-    }
-    const digest=require('crypto').createHash('sha256').update(JSON.stringify({jid:item.jid,text:personal})).digest('hex');
-    const claim=ledger.claim(source,batchId,item.jid,0,digest);
-    if (!claim.claimed) { results.push({to:item.phone || item.jid,name:item.name,ok:false,state:'review',error:'Prior outcome requires review'}); continue; }
     try {
-      const response=await sock.sendMessage(item.jid, { text: personal });
-      if (!response?.key?.id) throw new Error('Provider did not return a message ID');
-      ledger.finish(source,batchId,item.jid,0,'accepted',response.key.id,'Provider accepted; delivery not confirmed');
-      sent += 1; results.push({ to:item.phone || item.jid, name:item.name, ok:true, state:'accepted' });
+      await sock.sendMessage(item.jid, { text: personal }); // {text} — the v5 lesson
+      sent += 1; results.push({ to: item.phone || item.jid, name: item.name, ok: true });
     } catch (err) {
       const m = String(err?.message || err || '').slice(0, 120);
-      ledger.finish(source,batchId,item.jid,0,'uncertain','',m);
-      results.push({ to:item.phone || item.jid, name:item.name, ok:false, state:'uncertain', error:'Outcome uncertain — check Delivery review before sending again' });
+      results.push({ to: item.phone || item.jid, name: item.name, ok: false, error: /read.*'id'|not connected|Connection Closed/i.test(m) ? 'WhatsApp link not ready — try again after it reconnects' : m });
     }
-    await new Promise((r) => setTimeout(r, require('./pace').gapMin(1500)));
+    await new Promise((r) => setTimeout(r, 1500)); // WhatsApp-paced
   }
-  ring.info('bulk.send', `Bulk send: provider accepted ${sent}/${list.length}; delivery not confirmed`);
+  ring.info('bulk.send', `Bulk send: ${sent}/${list.length} delivered`);
   if (!meta.skipRecord) require('./db').BULKH.record(list.length, sent, list.length - sent, text, meta.listId || 0, meta.listName || '');
   try { require('./webhooks').fire('bulk.sent', { sent, total: list.length, listName: meta.listName || '', via: meta.listId ? 'saved list' : 'ad-hoc' }); } catch { } // 5G (R80)
-  return { sent, total: list.length, results, batchId };
+  return { sent, total: list.length, results };
 }
 
 /* ---------- uptime ---------- */

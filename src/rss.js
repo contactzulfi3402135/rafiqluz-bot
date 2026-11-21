@@ -22,76 +22,32 @@ function rssJid(url) {
   return 'rss-' + h + '@rss';
 }
 
-function decodeXml(value) {
-  const s=String(value || '');let text='',cursor=0;
-  while(cursor<s.length) {
-    const start=s.indexOf('<![CDATA[',cursor);
-    if(start<0){text+=s.slice(cursor);break;}
-    text+=s.slice(cursor,start);const end=s.indexOf(']]>',start+9);
-    if(end<0){text+=s.slice(start);break;}
-    text+=s.slice(start+9,end);cursor=end+3;
-  }
-  return text
+function decodeXml(s) {
+  return String(s || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'").replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(Number(n)); } catch { return ''; } })
     .replace(/&amp;/g, '&');
 }
-function stripTags(value) {
-  const s=String(value || '');let out='',i=0;
-  while(i<s.length) {
-    const start=s.indexOf('<',i);
-    if(start<0){out+=s.slice(i);break;}
-    out+=s.slice(i,start);const end=s.indexOf('>',start+1);
-    if(end<0) break;
-    const tag=s.slice(start+1,end).trim().toLowerCase();
-    if (/^(br\b|\/(p|div|li|h[1-6])\b)/.test(tag))out+='\n';
-    else out+=' ';
-    i=end+1;
-  }
-  return out.replace(/[ \t]+/g,' ').split(/\n+/).map(line=>line.trim()).join('\n').trim();
+function stripTags(s) {
+  return String(s || '').replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6])[^>]*>/gi, '\n').replace(/<[^>]*>/g, ' ').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
 }
 
 /** Lightweight RSS 2.0 / Atom parser — zero new dependencies (R6 stack). */
 function parseFeed(xml) {
-  const out = [], raw=String(xml || ''), lower=raw.toLowerCase();
-  const isAtom = /<feed[\s>]/i.test(raw), tag=isAtom?'entry':'item';
-  let cursor=0;
-  while (cursor<raw.length && out.length<MAX_ITEMS_PER_FETCH) {
-    const start=lower.indexOf('<'+tag,cursor);
-    if(start<0)break;
-    const next=lower[start+tag.length+1];
-    if(next && !/[\s/>]/.test(next)) {cursor=start+tag.length+1;continue;}
-    const openEnd=lower.indexOf('>',start+tag.length+1);
-    if(openEnd<0)break;
-    if(raw[openEnd-1]==='/'){cursor=openEnd+1;continue;}
-    const close=lower.indexOf('</'+tag+'>',openEnd+1);
-    if(close<0)break;
-    const end=close+tag.length+3;
-    const m=raw.slice(start,end);cursor=end;
-    const lowerItem=m.toLowerCase();
-    const get = (name) => {
-      name=name.toLowerCase();let pos=0;
-      while((pos=lowerItem.indexOf('<'+name,pos))>=0) {
-        const next=lowerItem[pos+name.length+1];
-        if(next && !/[\s>]/.test(next)){pos+=name.length+1;continue;}
-        const open=lowerItem.indexOf('>',pos+name.length+1);if(open<0)return '';
-        const close=lowerItem.indexOf('</'+name+'>',open+1);return close<0?'':m.slice(open+1,close).trim();
-      }
-      return '';
+  const out = [];
+  const isAtom = /<feed[\s>]/.test(xml);
+  const blockRe = isAtom ? /<entry[\s>][\s\S]*?<\/entry>|<entry\/>/g : /<item[\s>][\s\S]*?<\/item>|<item\/>/g;
+  for (const m of String(xml || '').match(blockRe) || []) {
+    const get = (tag) => {
+      const r = m.match(new RegExp('<' + tag + '(?:\\s[^>]*)?>([\\s\\S]*?)</' + tag + '>', 'i'));
+      return r ? r[1].trim() : '';
     };
     let title = decodeXml(get('title') || get('name'));
     let link = '';
     if (isAtom) {
-      let at=0,fallback='';
-      while((at=lowerItem.indexOf('<link',at))>=0) {
-        const end=lowerItem.indexOf('>',at+5);if(end<0)break;
-        const tagText=m.slice(at,Math.min(end+1,at+4096));at=end+1;
-        const href=tagText.match(/\bhref\s*=\s*["']([^"']{0,2048})["']/i);
-        if(!href)continue;
-        const value=decodeXml(href[1]);if(!fallback)fallback=value;
-        if(/\brel\s*=\s*["']alternate["']/i.test(tagText)){link=value;break;}
-      }
-      if(!link)link=fallback;
+      const alt = m.match(/<link[^>]*rel=["']alternate["'][^>]*href=["']([^"']*)["']/i) || m.match(/<link[^>]*href=["']([^"']*)["'][^>]*rel=["']alternate["']/i);
+      link = alt ? decodeXml(alt[1]) : (m.match(/<link[^>]*href=["']([^"']*)["']/i) || [])[1] || '';
     } else {
       link = decodeXml(get('link'));
     }
@@ -115,34 +71,38 @@ function sources() {
 }
 
 /** Fetch one feed and push unseen items into the pipeline. Returns stats. */
-async function fetchFeed(url) {
-  return (await require('./safe-public-fetch').fetchPublic(String(url || ''), {maxBytes:2*1024*1024,timeoutMs:20000})).toString('utf8');
-}
-async function pollOnce(src, options = {}) {
-  const xml = await (options.fetchFeed || fetchFeed)(src.url);
+async function pollOnce(src) {
+  const res = await fetch(src.url, {
+    redirect: 'follow',
+    signal: AbortSignal.timeout(20e3),
+    headers: { 'user-agent': 'Mozilla/5.0 (compatible; RaqifluzBot/1.0; channel-relay)', accept: 'application/atom+xml, application/rss+xml, application/xml, text/xml' }
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const xml = await res.text();
   const items = parseFeed(xml);
-  let added = 0, seen = 0, deferred = 0;
-  const pipeline = options.pipeline || require('./pipeline');
+  let added = 0, seen = 0;
+  const pipeline = require('./pipeline');
   for (const it of items) {
-    if (S.getBool('panic.on',false) || S.getBool('mirror.paused',false)) { deferred++; continue; }
     const d = db.open();
-    if (d.prepare('SELECT 1 FROM rss_seen WHERE url=? AND guid=?').get(src.url,it.id)) { seen++; continue; }
-    const result=await pipeline.intakeRss({ jid:src.jid, id:it.id, text:it.text, ts:it.ts, title:it.title, link:it.link, url:src.url, sourceName:src.name });
-    // Record only after the pipeline has created an outcome. A crash or pause
-    // before a post is recorded leaves the feed item eligible for a later poll.
-    // A recorded/uncertain send is not blindly replayed.
-    if (result?.state === 'recorded' || db.P.seen(src.jid,it.id)) {
-      d.prepare('INSERT OR IGNORE INTO rss_seen(url,guid) VALUES(?,?)').run(src.url,it.id); added++;
-    } else deferred++;
+    if (d.prepare('SELECT 1 FROM rss_seen WHERE url=? AND guid=?').get(src.url, it.id)) { seen++; continue; }
+    d.prepare('INSERT OR IGNORE INTO rss_seen(url, guid) VALUES(?,?)').run(src.url, it.id);
+    await pipeline.intakeRss({ jid: src.jid, id: it.id, text: it.text, ts: it.ts, title: it.title, link: it.link, url: src.url, sourceName: src.name });
+    added++;
   }
-  return {items:items.length,added,seen,deferred};
+  return { items: items.length, added, seen };
 }
 
 /** UI "Test feed" — fetch + parse only, nothing published. */
 async function testFeed(url) {
-  const items = parseFeed(await fetchFeed(url));
+  const res = await fetch(String(url || ''), { redirect: 'follow', signal: AbortSignal.timeout(15e3), headers: { 'user-agent': 'RaqifluzBot-1.0 (feed-test)' } });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const items = parseFeed(await res.text());
   if (!items.length) throw new Error('Fetched OK but no items found — the URL may not be a feed.');
-  return {items:items.length,jid:rssJid(url),sample:items.slice(0,3).map(i=>({title:i.title,link:i.link,ts:new Date(i.ts).toISOString().slice(0,16).replace('T',' ')}))};
+  return {
+    items: items.length,
+    jid: rssJid(url),
+    sample: items.slice(0, 3).map((i) => ({ title: i.title, link: i.link, ts: new Date(i.ts).toISOString().slice(0, 16).replace('T', ' ') }))
+  };
 }
 
 function start() {

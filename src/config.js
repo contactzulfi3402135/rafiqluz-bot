@@ -13,21 +13,16 @@ dotenv.config({ path: path.join(ROOT, '.env') }); // env vars ALWAYS win (Heroku
 const env = (k, f = '') => (process.env[k] != null && process.env[k] !== '' ? process.env[k] : f);
 const envInt = (k, f) => { const n = parseInt(process.env[k] || '', 10); return Number.isFinite(n) ? n : f; };
 
-// By default preserve the existing on-disk layout. An explicitly configured
-// state directory places all mutable files on one mounted persistent volume.
-// Individual overrides remain relative to the project root or may be absolute.
-const stateRoot = process.env.RAQ_STATE_DIR ? path.resolve(ROOT, process.env.RAQ_STATE_DIR) : ROOT;
-const statePath = (name, fallback) => process.env[name] ? path.resolve(ROOT, process.env[name]) : path.join(stateRoot, fallback);
 const PATHS = {
-  sessions: statePath('SESSION_DIR', 'sessions'),
-  database: statePath('DATABASE_PATH', 'data/bot.sqlite'),
-  media: statePath('MEDIA_DIR', 'media'),
-  backups: statePath('BACKUP_DIR', 'backups'),
-  logs: statePath('LOG_DIR', 'logs')
+  sessions: path.join(ROOT, env('SESSION_DIR', 'sessions')),
+  database: path.join(ROOT, env('DATABASE_PATH', 'data/bot.sqlite')),
+  media: path.join(ROOT, 'media'),
+  backups: path.join(ROOT, 'backups'),
+  logs: path.join(ROOT, 'logs')
 };
 
 const config = {
-  version: '11.7.0',
+  version: '11.5.0',
   botName: env('BOT_NAME', 'Raqifluz Channel Bot'),
   root: ROOT,
   paths: PATHS,
@@ -44,7 +39,6 @@ const config = {
 
   dashboard: {
     port: envInt('PORT', envInt('SERVER_PORT', 20249)),
-    host: env('RAQ_LISTEN_HOST', '0.0.0.0'), // use 127.0.0.1 for a local-only install
     username: env('DASHBOARD_USERNAME', 'admin'),
     password: env('DASHBOARD_PASSWORD', ''),
     sessionSecret: env('SESSION_SECRET', 'change-me'),
@@ -73,8 +67,7 @@ const config = {
 function ensureDirs() {
   const dirs = [PATHS.sessions, path.dirname(PATHS.database), PATHS.media, PATHS.backups, PATHS.logs];
   for (const d of dirs) {
-    fs.mkdirSync(d, { recursive: true, mode: 0o700 });
-    fs.accessSync(d, fs.constants.R_OK | fs.constants.W_OK);
+    try { fs.mkdirSync(d, { recursive: true }); } catch { /* best effort */ }
   }
 }
 

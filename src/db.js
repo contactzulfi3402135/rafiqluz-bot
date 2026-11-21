@@ -51,11 +51,6 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   UNIQUE(source_jid,source_msg_id,target_jid,part)
 );
 CREATE INDEX IF NOT EXISTS idx_delivery_review ON delivery_attempts(state,updated_at);
-CREATE TABLE IF NOT EXISTS compose_requests (
-  request_id TEXT PRIMARY KEY, digest TEXT NOT NULL, state TEXT NOT NULL,
-  result_json TEXT DEFAULT '', started_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
 CREATE TABLE IF NOT EXISTS logs(ts TEXT, level TEXT, code TEXT, msg TEXT, extra TEXT);
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts);
 /* ── v7: inbox is per-number (session) ─────────────────────────────── */
@@ -112,10 +107,8 @@ const MIGRATIONS = [
   "ALTER TABLE posts ADD COLUMN dismissed INTEGER DEFAULT 0",       // R47: owner dismissed a failed post
   "ALTER TABLE posts ADD COLUMN part INTEGER DEFAULT 0",            // R41: split-part index (0 = unsplit)
   "ALTER TABLE posts ADD COLUMN queued_at TEXT DEFAULT ''",         // R37: entered the approval/hold queue
-  "ALTER TABLE posts ADD COLUMN published_at TEXT DEFAULT ''",      // Completion time; legacy rows keep their historical created_at fallback
   /* 5B (v7.7.0) — full post text (the reason column only ever held 400-char notes) */
   "ALTER TABLE posts ADD COLUMN body TEXT DEFAULT ''",              // R53: copy / reuse / edit-republish
-  "ALTER TABLE posts ADD COLUMN source_text_digest TEXT DEFAULT ''", // Conservative source-edit baseline; legacy rows remain unknown
   /* 5C (v7.7.0) */
   "ALTER TABLE inbox_msgs ADD COLUMN voice_text TEXT DEFAULT ''",   // R58: transcription of voice messages
   /* 5D (v7.8.0) */
@@ -344,22 +337,14 @@ function migrateV7(d) {
   // inbox_chats: jid PK → (session, jid) PK + archive/pin/mute flags
   const cc = cols(d, 'inbox_chats');
   if (cc.length && !cc.includes('session')) {
-    // A leftover staging table may contain data from an interrupted older
-    // migration. Never merge, replace or discard it automatically.
-    if (d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inbox_chats_v7'").get()) {
-      throw new Error('Legacy inbox migration staging table already exists; stop and reconcile it from a verified backup.');
-    }
-    // The old rows remain in place if any insert, drop or rename fails.
-    d.transaction(() => {
-      d.exec(`CREATE TABLE inbox_chats_v7(
-        session TEXT DEFAULT 'main', jid TEXT, name TEXT, last_at TEXT, last_text TEXT,
-        unread INTEGER DEFAULT 0, archived INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, muted INTEGER DEFAULT 0,
-        PRIMARY KEY(session, jid))`);
-      d.exec(`INSERT INTO inbox_chats_v7(session,jid,name,last_at,last_text,unread)
-        SELECT 'main', jid, name, last_at, last_text, unread FROM inbox_chats`);
-      d.exec('DROP TABLE inbox_chats');
-      d.exec('ALTER TABLE inbox_chats_v7 RENAME TO inbox_chats');
-    })();
+    d.exec(`CREATE TABLE IF NOT EXISTS inbox_chats_v7(
+      session TEXT DEFAULT 'main', jid TEXT, name TEXT, last_at TEXT, last_text TEXT,
+      unread INTEGER DEFAULT 0, archived INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, muted INTEGER DEFAULT 0,
+      PRIMARY KEY(session, jid))`);
+    d.exec(`INSERT OR IGNORE INTO inbox_chats_v7(session,jid,name,last_at,last_text,unread)
+      SELECT 'main', jid, name, last_at, last_text, unread FROM inbox_chats`);
+    d.exec('DROP TABLE inbox_chats');
+    d.exec('ALTER TABLE inbox_chats_v7 RENAME TO inbox_chats');
     ring.info('db.migrate', 'Inbox chats migrated to multi-number schema (your old chat list is safe — session "main")');
   }
   // inbox_msgs: add the v7 columns one by one (ALTER ADD COLUMN is safe + instant)
@@ -393,8 +378,6 @@ function migrateV7(d) {
    (on an old database those columns don't exist yet and one bad statement would
    abort the whole schema exec — the v7.0.0 migration bug this guards against) */
 const POST_INDEXES = [
-  'CREATE INDEX IF NOT EXISTS idx_posts_guard_pub ON posts(status, published_at, created_at)',
-  'CREATE INDEX IF NOT EXISTS idx_delivery_guard_time ON delivery_attempts(updated_at, source_jid, source_msg_id)',
   'CREATE INDEX IF NOT EXISTS idx_inbox_chat ON inbox_msgs(session, chat_jid, id)',
   'CREATE INDEX IF NOT EXISTS idx_inbox_mid ON inbox_msgs(session, chat_jid, msg_id)',
   'CREATE INDEX IF NOT EXISTS idx_inbox_ts ON inbox_msgs(session, ts)',
@@ -413,40 +396,12 @@ function execSafe(d, sql) {
   }
 }
 
-// Refuse to run the pipeline on a partially migrated core database. This is a
-// small compatibility guard, not a full SQLite integrity or schema audit.
-function assertCoreSchema(d) {
-  const required = {
-    settings: ['key', 'value'], sources: ['jid', 'paused', 'targets', 'last_post_at', 'kind', 'url'],
-    targets: ['jid', 'paused'], routing_cells: ['source_jid', 'target_jid', 'enabled'],
-    posts: ['id', 'source_jid', 'source_msg_id', 'status', 'published_at'], post_keys: ['post_id', 'target_jid', 'msg_id'],
-    approvals: ['id', 'status', 'hold_until'], inbox_chats: ['session', 'jid'],
-    inbox_msgs: ['id', 'session', 'chat_jid', 'msg_id', 'media_file'],
-    delivery_attempts: ['source_jid', 'source_msg_id', 'target_jid', 'part', 'digest', 'state', 'updated_at']
-  };
-  const missing = [];
-  for (const [table, names] of Object.entries(required)) {
-    const columns = new Set(d.prepare(`PRAGMA table_info("${table}")`).all().map(x => x.name));
-    for (const name of names) if (!columns.has(name)) missing.push(`${table}.${name}`);
-  }
-  if (missing.length) throw new Error('Core SQLite schema is incomplete (' + missing.join(', ') + '). Stop and reconcile from a verified backup; do not delete state.');
-}
-
 function open() {
   if (db) return db;
   db = new Database(cfg.config.paths.database);
-  try {
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   db.pragma('busy_timeout = 5000');
-  // Only a genuinely empty database receives safety-first defaults. Existing
-  // installations with absent keys retain the historic implicit ON behavior.
-  const fresh = !db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1").get();
-  if(fresh) db.transaction(()=>{
-    db.exec('CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT)');
-    const insert=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');
-    insert.run('channels.automonitor','0');insert.run('channels.autotarget','0');
-  })();
   execSafe(db, SCHEMA);
   execSafe(db, SCHEMA_5A);
   execSafe(db, SCHEMA_5B);
@@ -467,9 +422,8 @@ function open() {
   try { db.exec("ALTER TABLE wa_scheduled ADD COLUMN interval_min INTEGER DEFAULT 0"); } catch { /* already added */ }
   try { db.exec("ALTER TABLE wa_scheduled ADD COLUMN tz TEXT DEFAULT 'Asia/Karachi'"); } catch { /* already added */ }
   for (const sql of MIGRATIONS) { try { db.exec(sql); } catch { /* column already exists */ } }
-  try { migrateV7(db); } catch (err) { try { ring.error('db.migrate.fail', `DB migration failed: ${err.message}`); } catch { } throw err; }
+  try { migrateV7(db); } catch (err) { try { ring.error('db.migrate.fail', `DB migration failed: ${err.message}`); } catch { } }
   for (const sql of POST_INDEXES) { try { db.exec(sql); } catch { } }
-  assertCoreSchema(db);
   /* 5D (R67): FTS5 indexes — whole statements (trigger bodies hold semicolons),
      then a one-time rebuild so rows written before 5D are searchable too */
   for (const sql of FTS_5D_STMTS) {
@@ -484,12 +438,6 @@ function open() {
   }
   ring.db = db;
   return db;
-  } catch (err) {
-    // Do not let a later caller reuse a partially initialized connection.
-    try { db.close(); } catch { }
-    db = null;
-    throw err;
-  }
 }
 
 /* v7.6.0: keep the cloud state small. Two tables grow without bound — the
@@ -498,28 +446,28 @@ function open() {
    them here, on every boot, keeps restore fast and memory-safe. Nothing else
    is ever touched (settings, sources, targets, posts, journal stay intact). */
 function pruneForMemory() {
-  // Historical versions silently deleted older logs and chat rows on boot.
-  // Retain them; owners can explicitly clean data from Storage after backup.
-  return {logs:0,inbox:0};
+  const d = open();
+  try {
+    const before = {
+      logs: d.prepare('SELECT COUNT(*) c FROM logs').get().c,
+      inbox: d.prepare('SELECT COUNT(*) c FROM inbox_msgs').get().c,
+    };
+    d.prepare('DELETE FROM logs WHERE rowid NOT IN (SELECT rowid FROM logs ORDER BY ts DESC LIMIT 6000)').run();
+    d.prepare('DELETE FROM inbox_msgs WHERE rowid NOT IN (SELECT rowid FROM inbox_msgs ORDER BY ts DESC LIMIT 4000)').run();
+    try { d.pragma('wal_checkpoint(TRUNCATE)'); } catch { }
+    const after = { logs: d.prepare('SELECT COUNT(*) c FROM logs').get().c, inbox: d.prepare('SELECT COUNT(*) c FROM inbox_msgs').get().c };
+    if (before.logs !== after.logs || before.inbox !== after.inbox) {
+      ring.info('db.prune', `State trimmed to stay small: logs ${before.logs}→${after.logs}, chat archive ${before.inbox}→${after.inbox} (older entries are history only — posts and settings untouched)`);
+    }
+  } catch (e) {
+    try { ring.warn('db.prune.fail', String(e?.message || e)); } catch { }
+  }
 }
 
 /* ---- settings KV ---- */
 const S = {
-  // Missing keys have defaults, but an unreadable database is not a missing
-  // key. Propagate SQLite errors rather than silently enabling fallback modes.
-  get: (k, f = '') => { const r = open().prepare('SELECT value FROM settings WHERE key=?').get(k); return r ? r.value : f; },
-  // Never report a failed settings write as success. This does not make a
-  // sequence of independent S.set calls atomic; callers must use transactions.
-  set: (k, v) => { open().prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v)); try { if (typeof S.onChange === 'function') S.onChange(k); } catch { } },
-  // Callers can opt into an all-or-nothing settings update. Notify backup
-  // listeners only after a successful commit, never from a rolled-back batch.
-  setMany: (entries) => {
-    if (!Array.isArray(entries) || entries.length > 100 || entries.some(e => !Array.isArray(e) || e.length !== 2 || typeof e[0] !== 'string' || !e[0] || e[0].length > 200)) throw new Error('Invalid settings batch');
-    const values = entries.map(([key, value]) => [key, String(value)]);
-    const d = open(), write = d.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
-    d.transaction(() => { for (const [key,value] of values) write.run(key,value); })();
-    for (const [key] of values) try { if (typeof S.onChange === 'function') S.onChange(key); } catch { }
-  },
+  get: (k, f = '') => { try { const r = open().prepare('SELECT value FROM settings WHERE key=?').get(k); return r ? r.value : f; } catch { return f; } },
+  set: (k, v) => { try { open().prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(k, String(v)); } catch { } try { if (typeof S.onChange === 'function') S.onChange(k); } catch { } },
   onChange: null,   /* v7.3.3: wired in index.js — every settings write queues a cloud save */
   getBool: (k, f = false) => { const v = String(S.get(k, f ? '1' : '0')).toLowerCase(); return v === '1' || v === 'true'; }
 };
@@ -527,13 +475,6 @@ const S = {
 /* ---- channels ---- */
 const CH = {
   listSources: () => open().prepare('SELECT * FROM sources ORDER BY name COLLATE NOCASE').all(),
-  // Indexed membership checks avoid reloading entire channel tables per event.
-  hasSource: (jid) => Boolean(open().prepare('SELECT 1 FROM sources WHERE jid=?').get(jid)),
-  getSource: (jid) => open().prepare('SELECT * FROM sources WHERE jid=?').get(jid) || null,
-  getActiveSource: (jid) => open().prepare('SELECT * FROM sources WHERE jid=? AND paused=0').get(jid) || null,
-  hasActiveSource: (jid) => Boolean(open().prepare('SELECT 1 FROM sources WHERE jid=? AND paused=0').get(jid)),
-  hasTarget: (jid) => Boolean(open().prepare('SELECT 1 FROM targets WHERE jid=?').get(jid)),
-  hasDirectory: (jid) => Boolean(open().prepare('SELECT 1 FROM directory WHERE jid=?').get(jid)),
   listActiveSources: () => open().prepare('SELECT * FROM sources WHERE paused=0 ORDER BY name COLLATE NOCASE').all(),
   lastSourceActivity: () => { try { const r = open().prepare('SELECT MAX(last_post_at) t FROM sources').get(); return String(r?.t || ''); } catch { return ''; } },
   listTargets: () => open().prepare('SELECT * FROM targets ORDER BY name COLLATE NOCASE').all(),
@@ -557,30 +498,9 @@ const CH = {
   dirList: () => open().prepare('SELECT * FROM directory ORDER BY name COLLATE NOCASE').all(),
   setSourceTargets: (jid, csv) => open().prepare('UPDATE sources SET targets=? WHERE jid=?').run(String(csv || '').replace(/[^0-9a-z@.,_-]/gi, '').slice(0, 2000), jid),
   setLastPost: (jid) => { try { open().prepare("UPDATE sources SET last_post_at=datetime('now') WHERE jid=?").run(jid); } catch { } },
-  // A database failure must not be interpreted as an empty rate history.
-  publishedLastHour: () => open().prepare(`SELECT COUNT(*) n FROM (
-    SELECT p.id FROM posts p WHERE p.status IN ('published','edited')
-      AND COALESCE(NULLIF(p.published_at,''),p.created_at) >= datetime('now','-1 hour')
-    UNION
-    SELECT p.id FROM delivery_attempts a JOIN posts p ON p.source_jid=a.source_jid AND p.source_msg_id=a.source_msg_id
-      WHERE a.state IN ('sending','accepted','unverified','uncertain') AND a.updated_at >= datetime('now','-1 hour')
-  )`).get().n,
-  pubCountLastHour: (targetJid) => open().prepare("SELECT COUNT(*) n FROM target_publish_log WHERE target_jid=? AND ts >= datetime('now','-1 hour')").get(String(targetJid || '')).n,
-  // The publisher reserves this rate slot before starting the provider call.
-  // A failed/uncertain request still consumes the slot, conservatively.
-  recordPub: (targetJid) => open().prepare('INSERT INTO target_publish_log(target_jid) VALUES(?)').run(String(targetJid || '')),
-  reservePub: (targetJid, maxPerHour = 0) => {
-    if (!Number.isInteger(maxPerHour) || maxPerHour < 0) throw new Error('Invalid target rate cap');
-    // Count and reserve in one write transaction so other SQLite connections
-    // cannot both observe the last available slot. This is not coordination
-    // across independently replicated SQLite databases.
-    const d = open();
-    return d.transaction(() => {
-      if (maxPerHour && CH.pubCountLastHour(targetJid) >= maxPerHour) return false;
-      CH.recordPub(targetJid);
-      return true;
-    }).immediate();
-  }
+  publishedLastHour: () => { try { return open().prepare("SELECT COUNT(*) n FROM posts WHERE status='published' AND created_at >= datetime('now','-1 hour')").get().n; } catch { return 0; } },
+  pubCountLastHour: (targetJid) => { try { return open().prepare("SELECT COUNT(*) n FROM target_publish_log WHERE target_jid=? AND ts >= datetime('now','-1 hour')").get(String(targetJid || '')).n; } catch { return 0; } },
+  recordPub: (targetJid) => { try { open().prepare('INSERT INTO target_publish_log(target_jid) VALUES(?)').run(String(targetJid || '')); } catch { } }
 };
 
 /* ---- AI chat + bulk history (v6.1) ---- */
@@ -701,8 +621,8 @@ const P = {
   postId: (jid, mid) => { const r = open().prepare('SELECT id FROM posts WHERE source_jid=? AND source_msg_id=?').get(jid, mid); return r ? r.id : null; },
   /* 5B: optional 4th arg stores the full text (reason stays a short note) */
   setStatus: (postId, status, reason, body) => body !== undefined
-    ? open().prepare("UPDATE posts SET status=?, reason=?, body=?, published_at=CASE WHEN ?='published' THEN datetime('now') ELSE published_at END WHERE id=?").run(status, reason || '', body || '', status, postId)
-    : open().prepare("UPDATE posts SET status=?, reason=?, published_at=CASE WHEN ?='published' THEN datetime('now') ELSE published_at END WHERE id=?").run(status, reason || '', status, postId),
+    ? open().prepare('UPDATE posts SET status=?, reason=?, body=? WHERE id=?').run(status, reason || '', body || '', postId)
+    : open().prepare('UPDATE posts SET status=?, reason=? WHERE id=?').run(status, reason || '', postId),
   /* 5D (R61): media flag — set on every publish pass (mark's INSERT OR IGNORE
      must not clobber it, and retry paths re-mark rows that already exist) */
   setMedia: (postId, hasMedia) => { try { open().prepare('UPDATE posts SET has_media=? WHERE id=?').run(hasMedia ? 1 : 0, postId); } catch { } }
@@ -895,10 +815,10 @@ const IB = {
     } catch { }
   },
   messages: (session, jid, limit = 500) => open().prepare(`SELECT id, session, chat_jid, from_me, ts, sender_name, COALESCE(sender_jid,'') sender_jid, body, msg_id, kind, deleted, edited, orig_body,
-    CASE WHEN media_data IS NOT NULL OR COALESCE(media_file,'') <> '' THEN 1 ELSE 0 END has_media,
+    CASE WHEN media_data IS NULL THEN 0 ELSE 1 END has_media,
     CASE WHEN kind='call' THEN 1 ELSE 0 END is_call
     FROM inbox_msgs WHERE session=? AND chat_jid=? ORDER BY id ASC LIMIT ?`).all(String(session || 'main'), String(jid), limit),
-  mediaOf: (session, id, jid) => open().prepare('SELECT media_mime, media_name, media_data, COALESCE(media_file,\'\') media_file FROM inbox_msgs WHERE session=? AND id=? AND chat_jid=?').get(String(session || 'main'), Number(id), String(jid || '')),
+  mediaOf: (session, id) => open().prepare('SELECT media_mime, media_name, media_data, COALESCE(media_file,\'\') media_file FROM inbox_msgs WHERE session=? AND id=?').get(String(session || 'main'), Number(id)),
   add: (row) => {
     try {
       const r = open().prepare(`INSERT INTO inbox_msgs(session, chat_jid, from_me, ts, sender_name, sender_jid, body, msg_id, kind, media_mime, media_name, media_data)
@@ -910,29 +830,27 @@ const IB = {
   findByMsgId: (session, jid, msgId) => open().prepare('SELECT * FROM inbox_msgs WHERE session=? AND chat_jid=? AND msg_id=? ORDER BY id DESC LIMIT 1').get(String(session || 'main'), String(jid), String(msgId)) || null,
   applyEdit: (session, jid, msgId, newBody) => open().prepare(`UPDATE inbox_msgs SET orig_body=CASE WHEN orig_body='' THEN body ELSE orig_body END, body=?, edited=1
     WHERE session=? AND chat_jid=? AND msg_id=?`).run(String(newBody || '').slice(0, 2000), String(session || 'main'), String(jid), String(msgId)),
-  setMedia: (id, mime, name, data) => open().prepare('UPDATE inbox_msgs SET media_mime=?, media_name=?, media_data=? WHERE id=? AND COALESCE(media_cleared,0)=0').run(String(mime || ''), String(name || '').slice(0, 120), data || null, Number(id)),
+  setMedia: (id, mime, name, data) => open().prepare('UPDATE inbox_msgs SET media_mime=?, media_name=?, media_data=? WHERE id=?').run(String(mime || ''), String(name || '').slice(0, 120), data || null, Number(id)),
   /* v9.0.0 (repo-slim): the file variant — the bytes live in media/<rel>, only the
      relative path goes into the (cloud-synced) database. */
-  setMediaRef: (id, mime, name, rel) => { try { open().prepare('UPDATE inbox_msgs SET media_mime=?, media_name=?, media_file=? WHERE id=? AND COALESCE(media_cleared,0)=0').run(String(mime || ''), String(name || '').slice(0, 120), String(rel || ''), Number(id)); } catch { } },
+  setMediaRef: (id, mime, name, rel) => { try { open().prepare('UPDATE inbox_msgs SET media_mime=?, media_name=?, media_file=? WHERE id=?').run(String(mime || ''), String(name || '').slice(0, 120), String(rel || ''), Number(id)); } catch { } },
   trimMedia: (keep = 300) => { try { open().prepare(`UPDATE inbox_msgs SET media_data=NULL WHERE media_data IS NOT NULL AND id NOT IN
       (SELECT id FROM inbox_msgs WHERE media_data IS NOT NULL ORDER BY id DESC LIMIT ?)`).run(keep); } catch { } },
   /* v9.0.0 (repo-slim): retention janitor for inbox media.
-     - files and BLOBs older than `days` are removed on explicit cleanup
-       or when the owner has enabled automatic age-based cleanup.
+     - files (media/inbox/*): older than `days` OR beyond the newest 1000 → deleted from disk, ref cleared
+     - BLOBs (pre-build rows + embedded thumbs): older than `days` OR beyond the newest 300 → nulled
      Returns { files, blobs } counts. */
   pruneMedia: (days = 30) => {
     try {
       const d = open();
       const cutoff = new Date(Date.now() - Math.max(1, Number(days) || 30) * 86400e3).toISOString();
+      const delFile = (rel) => { try { if (rel) fs.unlinkSync(path.join(cfg.config.paths.media, rel)); } catch { } };
       let files = 0;
-      for (const r of d.prepare("SELECT id, media_file FROM inbox_msgs WHERE media_file != '' AND datetime(ts) < datetime(?)").all(cutoff)) {
-        const safe=require('./inbox-media-path').resolveInboxMedia(cfg.config.paths.media,r.media_file);
-        if (!safe) { ring.warn('media.unsafe-ref','Skipped an invalid saved media reference'); continue; }
-        try { fs.unlinkSync(safe); } catch(e) { if(e.code!=='ENOENT') continue; }
-        d.prepare("UPDATE inbox_msgs SET media_file='' WHERE id=?").run(r.id); files += 1;
-      }
-      const b1 = d.prepare('UPDATE inbox_msgs SET media_data=NULL WHERE media_data IS NOT NULL AND datetime(ts) < datetime(?)').run(cutoff);
-      return { files, blobs: b1.changes || 0 };
+      for (const r of d.prepare("SELECT id, media_file FROM inbox_msgs WHERE media_file != '' AND ts < ?").all(cutoff)) { delFile(r.media_file); d.prepare("UPDATE inbox_msgs SET media_file='' WHERE id=?").run(r.id); files += 1; }
+      for (const r of d.prepare("SELECT id, media_file FROM inbox_msgs WHERE media_file != '' AND id NOT IN (SELECT id FROM inbox_msgs WHERE media_file != '' ORDER BY id DESC LIMIT 1000)").all()) { delFile(r.media_file); d.prepare("UPDATE inbox_msgs SET media_file='' WHERE id=?").run(r.id); files += 1; }
+      const b1 = d.prepare('UPDATE inbox_msgs SET media_data=NULL WHERE media_data IS NOT NULL AND ts < ?').run(cutoff);
+      const b2 = d.prepare('UPDATE inbox_msgs SET media_data=NULL WHERE media_data IS NOT NULL AND id NOT IN (SELECT id FROM inbox_msgs WHERE media_data IS NOT NULL ORDER BY id DESC LIMIT 300)').run();
+      return { files, blobs: (b1.changes || 0) + (b2.changes || 0) };
     } catch { return { files: 0, blobs: 0 }; }
   },
   /* size of the on-disk inbox media cache (media/inbox/) */
@@ -947,11 +865,7 @@ const IB = {
       const d = open();
       const row = d.prepare("SELECT id, media_file FROM inbox_msgs WHERE session=? AND chat_jid=? AND msg_id=?").get(String(session || 'main'), String(chatJid || ''), String(msgId || ''));
       if (!row) return 0;
-      if (row.media_file) {
-        const safe=require('./inbox-media-path').resolveInboxMedia(cfg.config.paths.media,row.media_file);
-        if (!safe) return 0;
-        try { fs.unlinkSync(safe); } catch(e) { if(e.code!=='ENOENT') return 0; }
-      }
+      if (row.media_file) { try { fs.unlinkSync(path.join(cfg.config.paths.media, row.media_file)); } catch { } }
       d.prepare("UPDATE inbox_msgs SET media_file='', media_data=NULL, media_cleared=1 WHERE id=?").run(row.id);
       return 1;
     } catch { return 0; }
@@ -981,12 +895,12 @@ const Q = {
 const SR = {
   get: (jid) => { const r = open().prepare('SELECT * FROM source_rules WHERE source_jid=?').get(String(jid)) || null; return r || { source_jid: jid, approve_first: 0, active_from: '', active_to: '', max_per_day: 0, include: '', exclude: '', auto_pause: 0, priority: 3 }; },
   all: () => open().prepare('SELECT * FROM source_rules').all(),
-  save: (jid, f) => { open().prepare(`INSERT INTO source_rules(source_jid,approve_first,active_from,active_to,max_per_day,include,exclude,auto_pause,priority) VALUES(?,?,?,?,?,?,?,?,?)
+  save: (jid, f) => { try { open().prepare(`INSERT INTO source_rules(source_jid,approve_first,active_from,active_to,max_per_day,include,exclude,auto_pause,priority) VALUES(?,?,?,?,?,?,?,?,?)
     ON CONFLICT(source_jid) DO UPDATE SET approve_first=excluded.approve_first, active_from=excluded.active_from, active_to=excluded.active_to,
     max_per_day=excluded.max_per_day, include=excluded.include, exclude=excluded.exclude, auto_pause=excluded.auto_pause, priority=excluded.priority`).run(
     String(jid), f.approve_first ? 1 : 0, String(f.active_from || '').slice(0, 5), String(f.active_to || '').slice(0, 5),
     Math.max(0, Math.min(500, parseInt(f.max_per_day, 10) || 0)), String(f.include || '').slice(0, 500), String(f.exclude || '').slice(0, 500),
-    f.auto_pause ? 1 : 0, Math.max(1, Math.min(5, parseInt(f.priority, 10) || 3))); }
+    f.auto_pause ? 1 : 0, Math.max(1, Math.min(5, parseInt(f.priority, 10) || 3))); } catch { } }
 };
 
 /* ---- 5A: routing matrix (source × target on/off) ---- */

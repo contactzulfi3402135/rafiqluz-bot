@@ -42,7 +42,7 @@ function buildRecap(d) {
 function start() {
   setInterval(async () => {
     try {
-      if (require('./panic').active() || require('./lifecycle').isStopping()) return; // 5E (R73): panic stop
+      if (require('./panic').active()) return; // 5E (R73): panic stop
       if (!S.getBool('power.recap.on', false)) return;
       const at = String(S.get('recap.at', '07:00')).trim() || '07:00';
       if (pktHHMM() !== at) return;

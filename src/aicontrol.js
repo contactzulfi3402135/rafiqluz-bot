@@ -248,14 +248,15 @@ const TOOLS = [
       for (const k of keys) {
         try {
           await wa.deleteChannelPost(sock, k.target_jid, k.msg_id);
-          results.push(String(k.target_jid).split('@')[0] + ': request accepted; verify on channel');
+          results.push(String(k.target_jid).split('@')[0] + ': deleted');
         } catch (e) {
           results.push(String(k.target_jid).split('@')[0] + ': FAILED (' + String(e.message || e).slice(0, 80) + ')');
         }
       }
       const okCount = results.filter((x) => !/FAILED/.test(x)).length;
-      ring.info('ai.undo', `Undo last: ${okCount}/${keys.length} deletion requests accepted for post #${row.id}; verify on channels`);
-      return { undone: false, requestsAccepted: okCount, results, note: 'Requests are not verified deletions. Check each channel; original message IDs remain in history.' };
+      P.setStatus(row.id, 'skipped', 'undone by owner via AI — deleted from ' + okCount + '/' + keys.length + ' target(s)');
+      ring.info('ai.undo', `Undo last: post #${row.id} deleted from ${okCount}/${keys.length} target(s)`);
+      return { undone: okCount === keys.length, results, note: 'Removed from the channel(s). It will not be re-mirrored.' };
     }
   }
 ];

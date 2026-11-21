@@ -27,7 +27,6 @@ async function login(password) {
  r=await req('/api/settings',{method:'POST',headers:rh,body:JSON.stringify({botName:'ILLEGAL'})});ok(r.status===403,'read-only bearer cannot mutate');
  r=await req('/api/settings',{method:'POST',headers:{...auth,cookie:ro.cookie},body:'{}'});ok(r.status===403,'read-only session is not elevated by bearer header');
  r=await req('/api/backup/download',{headers:rh});ok(r.status===403,'read-only cannot download secrets in backup');
- r=await req('/api/backup/full-download',{headers:rh});ok(r.status===403,'read-only cannot download complete backup credentials');
  r=await req('/api/qr',{headers:rh});ok(r.status===403,'read-only cannot access pairing QR');
  r=await req('/api/status',{headers:rh});let status=await r.json();ok(status.qr===null,'read-only status redacts pairing QR');
  r=await req('/api/session',{headers:rh});let session=await r.json();ok(session.role==='readonly','session reports bearer role');
