@@ -34,8 +34,10 @@ const jidPrettify = (name, jid) => {
 };
 const chanName = (c) => {
   const n = String(c.name || '').trim();
-  if (n && n !== c.jid && !/^\d+(@[a-z.]+)?$/i.test(n)) return n;
-  return 'Channel •' + String(c.jid).split('@')[0].slice(-4);
+  if (n && n !== c.jid && !/^\d+(@[a-z.]+)?$/i.test(n) && !/^Channel •\d+$/i.test(n) && n !== 'Name unavailable' && n !== '[object Object]') return n;
+  const cached = String((window.__dirNames && window.__dirNames[c.jid]) || '').trim();
+  if (cached && cached !== c.jid && !/^\d+(@[a-z.]+)?$/i.test(cached) && !/^Channel •\d+$/i.test(cached) && cached !== 'Name unavailable' && cached !== '[object Object]') return cached;
+  return 'Name unavailable';
 };
 /* v7.10: every channel-name display goes through chanName — a stored name that
    is a bare number/jid is shown as "Channel •last4", never as raw digits. */
@@ -259,6 +261,15 @@ setInterval(notifBadge, 60000);
   }
 })();
 
+/* Dashboard is arranged as full-size panels instead of shrinking controls. */
+window.showHomeSection = function (name) {
+  if (!document.querySelector(`[data-home-panel="${name}"]`)) return;
+  $$('[data-home-panel]').forEach(panel => { panel.hidden = panel.dataset.homePanel !== name; });
+  $$('[data-home-tab]').forEach(btn => { const on = btn.dataset.homeTab === name; btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', String(on)); });
+};
+$$('[data-home-tab]').forEach(btn => btn.addEventListener('click', () => window.showHomeSection(btn.dataset.homeTab)));
+$('#homeOpenWizard').addEventListener('click', () => { if (window.openWizard) window.openWizard(); });
+
 /* ── 4 · ROUTER (Meridian 2 — 6 areas → 23 content screens + 5 settings sections) ─
    One home per switch. Old view names still resolve through LEGACY_VIEWS so any
    deep link, button or saved view keeps working after the regrouping. */
@@ -453,6 +464,7 @@ setInterval(pollStatus, 30000);
     if (window.__waStatus === 'open') { show('whatsapp'); return; }
     show('home');
     const q = $('#qrCard');
+    window.showHomeSection('setup');
     if (q) q.hidden = false;
     setTimeout(() => { if (q && q.isConnected) q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
     api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
@@ -635,14 +647,14 @@ setInterval(pollStatus, 30000);
           const vEl = $('.view:not([hidden])');
           const v = vEl ? vEl.dataset.view : null;
           if (v === 'browse' && !typing) brwLoad(true);
-          else if (!typing && v && loaders[v] && !quietViews[v]) loaders[v]().catch(() => { });
+          else if (!typing && v && !['sources', 'targets'].includes(v) && loaders[v] && !quietViews[v]) loaders[v]().catch(() => { });
         })();
         return;
       }
       if (d.type !== 'activity') return;
       const vEl = $('.view:not([hidden])');
       const v = vEl ? vEl.dataset.view : null;
-      if (!v || quietViews[v] || !loaders[v]) return;
+      if (!v || quietViews[v] || !loaders[v] || v === 'sources' || v === 'targets') return;
       const a = document.activeElement;
       if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.isContentEditable)) return;
       loaders[v]().catch(() => {});
@@ -659,16 +671,50 @@ function stampSync(kind) {
   const el = $(kind === 'sources' ? '#srcSyncTime' : '#tgtSyncTime');
   if (el) el.textContent = 'Last synced ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+const channelRequest = { sources: 0, targets: 0 };
+function renderChannelList(kind, list) {
+  const tbody = $(kind === 'sources' ? '#srcTable tbody' : '#tgtTable tbody');
+  if (!tbody) return;
+  const scroller = tbody.closest('.tw'), content = $('#content');
+  const top = content.scrollTop, inner = scroller ? scroller.scrollTop : 0;
+  const old = new Map($$('tr[data-jid]', tbody).map(row => [row.dataset.jid, row]));
+  const ordered = (list || []).slice().sort((a,b) => chanName(a).localeCompare(chanName(b)));
+  let cursor = tbody.firstElementChild;
+  for (const item of ordered) {
+    const signature = JSON.stringify(item), prev = old.get(item.jid);
+    let row = prev;
+    if (!row || row.__channelSignature !== signature) {
+      const tmp = document.createElement('tbody'); tmp.innerHTML = channelRows([item], kind);
+      row = tmp.firstElementChild; row.__channelSignature = signature;
+      if (prev) { prev.replaceWith(row); if (cursor === prev) cursor = row; }
+    }
+    old.delete(item.jid);
+    if (row !== cursor) tbody.insertBefore(row, cursor);
+    cursor = row.nextElementSibling;
+  }
+  for (const row of old.values()) row.remove();
+  // Remove only empty-state/skeleton rows, not unchanged channel rows.
+  Array.from(tbody.children).forEach(row => { if (!row.dataset.jid) row.remove(); });
+  if (!ordered.length) {
+    const title = kind === 'sources' ? 'No sources yet' : 'No targets yet';
+    const help = kind === 'sources' ? 'Add a source above, or follow a channel with Auto-monitor on. Refresh to check your followed channels.' : 'Add a channel above that your account can post to.';
+    tbody.innerHTML = `<tr><td colspan="${kind === 'sources' ? 6 : 5}"><div class="es"><div class="es-t">${title}</div><div class="es-s">${help}</div></div></td></tr>`;
+  }
+  if (scroller) scroller.scrollTo({ top: inner, behavior: 'instant' });
+  content.scrollTo({ top, behavior: 'instant' });
+}
 async function refreshChannels(kind, opts = {}) {
   const tbody = $(kind === 'sources' ? '#srcTable tbody' : '#tgtTable tbody');
   try {
+    const request = ++channelRequest[kind];
     const d = await api('/api/' + kind);
+    if (request !== channelRequest[kind]) return d;
     chanSync[kind] = Date.now();
     stampSync(kind);
     if (!tbody || $(`.view[data-view="${kind}"]`).hidden) return d;
-    tbody.innerHTML = channelRows(d.list || [], kind);
+    renderChannelList(kind, d.list || []);
     $(kind === 'sources' ? '#srcCount' : '#tgtCount').textContent = (d.list || []).length;
-    if (kind === 'sources') refreshPicker('sources');
+    if (kind === 'sources') { refreshPicker('sources'); paintSubs(); }
     if (kind === 'targets') { refreshPicker('targets'); fillSchedTargets(d.list || []); }
     return d;
   } catch (e) {
@@ -703,6 +749,17 @@ $('#srcRefresh').addEventListener('click', async () => {
   } catch (e) { /* best effort */ }
 });
 $('#tgtRefresh').addEventListener('click', () => { toast('Re-syncing targets…'); refreshChannels('targets', { announce: true }); });
+$$('[data-resolve-names]').forEach(button => button.addEventListener('click', async () => {
+  button.disabled = true;
+  try {
+    const result = await api('/api/channels/resolve-names', { method: 'POST', body: {} });
+    await Promise.all([refreshChannels('sources'), refreshChannels('targets')]);
+    if (result.noSocket) toast('Link WhatsApp to look up channel names.', 'warn');
+    else if (result.busy) toast('A name lookup is already in progress. Try again shortly.');
+    else toast(result.resolved.length ? `Recovered ${result.resolved.length} channel name(s).` : 'No new names returned. WhatsApp may need more time; try again later.', result.resolved.length ? 'ok' : '');
+  } catch (e) { toast('Could not refresh names: ' + e.message, 'err'); }
+  finally { button.disabled = false; }
+}));
 
 /* ── 6b · v7.8.0 · BROWSE CHANNELS ───────────────────────────────
    Real WhatsApp browse experience in the dashboard: categories + country
@@ -910,7 +967,7 @@ function closeModal() {
   if (dk) document.removeEventListener('keydown', dk);
   if (_modalScrim && _modalScrim.isConnected) _modalScrim.remove();
   _modalScrim = null;
-  if (_lastFocus && _lastFocus.isConnected) { try { _lastFocus.focus(); } catch (e) {} }
+  if (_lastFocus && _lastFocus.isConnected) { try { _lastFocus.focus({ preventScroll: true }); } catch (e) {} }
   if (cb) { try { cb(); } catch (e) {} }
 }
 /* promise-based confirmation naming the exact item */
@@ -1157,6 +1214,7 @@ $('#pauseBtn').addEventListener('click', async () => {
   const btn = $('#pauseBtn');
   if (btn.dataset.mode === 'link') {
     const q = $('#qrCard');
+    window.showHomeSection('setup');
     if (q) { q.hidden = false; q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
     return;
@@ -1191,6 +1249,8 @@ function cloudTestWire(root) {
 function cloudBanner(cs) {
   const box = $('#cloudNote');
   if (!box) return;
+  const badge = $('#homeBackupState');
+  if (badge) { badge.textContent = !cs ? 'Unknown' : !cs.enabled ? 'Backup off' : cs.lastError ? 'Backup error' : 'Backup on'; badge.dataset.attention = String(!cs || !cs.enabled || Boolean(cs.lastError)); }
   if (!cs) { box.innerHTML = ''; return; }
   if (!cs.enabled) {
     box.innerHTML = `<div class="cloud-alert" role="status">
@@ -1249,35 +1309,8 @@ loaders.home = async () => {
   const orderIdx = (id) => { const i = savedOrder.indexOf(id); return i >= 0 ? i : 99; };
   $('#kpiGrid').innerHTML = kpiDefs.slice().sort((a, b) => orderIdx(a[0]) - orderIdx(b[0])).map(([id, html]) => html.replace('<div class="kpi"', `<div class="kpi kpi-drag" draggable="true" data-kpi="${id}" title="Drag to reorder — the order is saved"`)).join('');
   wireKpiDrag();
-  /* v1.1: actionable empty states — a CTA inside the card instead of a dead-end zero (reuses the existing flows) */
-  try {
-    if (wa.status !== 'open') {
-      const kEl = $('#kpiGrid .kpi[data-kpi="wa"]');
-      if (kEl) {
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'btn btn-p btn-sm kpi-cta';
-        if (wa.status === 'connecting') { b.textContent = 'Connecting…'; b.disabled = true; }
-        else {
-          b.textContent = 'Connect WhatsApp via QR';
-          b.addEventListener('click', () => {
-            const q = $('#qrCard');
-            if (q) { q.hidden = false; q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-            api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
-          });
-        }
-        kEl.appendChild(b);
-      }
-    }
-    if (!(ov.sources > 0)) {
-      const kEl = $('#kpiGrid .kpi[data-kpi="sources"]');
-      if (kEl) {
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'btn btn-p btn-sm kpi-cta'; b.textContent = 'Add first source';
-        b.addEventListener('click', () => show('sources'));
-        kEl.appendChild(b);
-      }
-    }
-  } catch (e) { /* CTAs are progressive enhancement */ }
+  /* Connect remains in the status panel; channel setup remains in Actions & health
+     and the sidebar. Avoid repeating large buttons inside the metrics grid. */
   /* 5E (R74/R73): adaptive-pacing + panic status strip on the dashboard */
   paintPaceStrip(ov);
   /* 5J (J2): setup wizard — progress is SAVED (ui.setup.done); auto-hides once
@@ -1368,8 +1401,15 @@ function wireChannelTable(tableSel, kind) {
       } else {
         const ok = await confirmModal('Remove channel?', `<b>${esc(chanName({ name: tr.children[0].textContent, jid }))}</b> will be removed from ${kind}. Posts already published stay where they are.`, 'Remove', true);
         if (!ok) return;
+        btn.disabled = true;
+        const content = $('#content'), wrap = tr.closest('.tw');
+        const top = content.scrollTop, inner = wrap ? wrap.scrollTop : 0;
+        const next = tr.nextElementSibling || tr.previousElementSibling;
         await api('/api/' + kind + '/' + encodeURIComponent(jid), { method: 'DELETE' });
-        tr.remove(); // N1a: in-place removal
+        if (next && next.isConnected) { const focus = next.querySelector('[data-act=del]'); if (focus) focus.focus({ preventScroll: true }); }
+        tr.remove();
+        if (wrap) wrap.scrollTo({top:inner, behavior:'instant'});
+        content.scrollTo({top, behavior:'instant'});
         toast('Removed', 'ok', { label: 'Undo', fn: () => toast('Re-add it from the picker to undo', '') });
         refreshChannels(kind);
       }
@@ -1449,20 +1489,10 @@ async function openRulesModal(jid) {
   });
 }
 loaders.sources = async () => {
-  $('#srcTable tbody').innerHTML = skelRows(3, 6);
-  const [d, p] = await Promise.all([api('/api/sources'), api('/api/power')]);
-  if ((d.list || []).length) {
-    $('#srcTable tbody').innerHTML = channelRows(d.list, 'sources');
-  } else {
-    /* v7.7.3: emptyRow() paints the cell itself — assigning its (undefined)
-       return value used to render the literal string "undefined" in the table */
-    await emptyRow($('#srcTable tbody'), 'radio', 'No sources yet', 'follow a channel on your phone and it appears here automatically (Auto-monitor) — usually within a few minutes of linking. Still empty? Press Refresh top-right to check with WhatsApp now, or re-link in the WhatsApp tab', 6);
-  }
-  $('#srcCount').textContent = (d.list || []).length;
+  const [d, p] = await Promise.all([refreshChannels('sources'), api('/api/power')]);
+  if (!d) return;
   $('#automonitor').checked = !!p.automonitor;
-  refreshPicker('sources');
-  paintSubs(); // 5I (I1): subscriber counts + 14-day growth sparkline (best-effort)
-  srcFollowedBanner(d.followedMissing || []); // v7.9: followed → one click into Sources
+  srcFollowedBanner(d.followedMissing || []);
 };
 /* v7.9: channels this account follows on WhatsApp that are not in Sources yet
    → a list above the table (works whether or not Auto-monitor is on).
@@ -1532,19 +1562,7 @@ function sparklineSVG(vals) {
   const up = vals[vals.length - 1] >= vals[0];
   return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-label="subscriber growth, last ${vals.length} days"><polyline points="${pts}" fill="none" stroke="${up ? 'var(--ok, #10B981)' : 'var(--warn, #F59E0B)'}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }
-loaders.targets = async () => {
-  $('#tgtTable tbody').innerHTML = skelRows(3, 5);
-  const d = await api('/api/targets');
-  if ((d.list || []).length) {
-    $('#tgtTable tbody').innerHTML = channelRows(d.list, 'targets');
-  } else {
-    /* v7.7.3: emptyRow() paints the cell itself — assigning its return value rendered "undefined" */
-    await emptyRow($('#tgtTable tbody'), 'target', 'No targets yet', 'add a channel your account can post to', 5);
-  }
-  $('#tgtCount').textContent = (d.list || []).length;
-  fillSchedTargets(d.list || []);
-  refreshPicker('targets');
-};
+loaders.targets = async () => { await refreshChannels('targets'); };
 wireChannelTable('#srcTable', 'sources');
 wireChannelTable('#tgtTable', 'targets');
 $('#srcAdd').addEventListener('click', async () => {
@@ -4261,6 +4279,7 @@ async function sendAiChat() {
     const r = await api('/api/ai/chat', { method: 'POST', body: { message: msg } });
     for (const a of (r.actions || [])) {
       log.insertAdjacentHTML('beforeend', `<div class="bubble tool">tool: ${esc(a.tool)} ${esc(JSON.stringify(a.args || {}))} → ${esc(a.ok ? JSON.stringify(a.result) : 'ERROR: ' + a.error)}</div>`);
+
     }
     log.insertAdjacentHTML('beforeend', `<div class="bubble bot">${esc(r.reply)}</div>`);
   } catch (e) { log.insertAdjacentHTML('beforeend', `<div class="bubble bot">Error: ${esc(e.message)}</div>`); }
@@ -5548,7 +5567,37 @@ async function loadAiSafety() {
 }
 loaders.aipilot = (loaders.aipilot || (async () => { }));
 const __aiPilotJ = loaders.aipilot;
-loaders.aipilot = async () => { await __aiPilotJ(); loadAiSafety(); };
+let editorDirty = false, editorExampleText = '';
+const editorIds = ['editorEnabled','editorSemantic','editorAds','editorContacts','editorInstruction','editorFooter','editorFooterMode','editorDomains','editorTimezone'];
+editorIds.forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('input', () => { editorDirty = true; }); });
+async function loadEditorSettings(force = false) {
+  if (editorDirty && !force) return;
+  const d = await api('/api/ai/editor');
+  if (editorDirty && !force) return;
+  $('#editorEnabled').checked = d.enabled; $('#editorSemantic').checked = d.semantic;
+  $('#editorAds').checked = d.skipAds; $('#editorContacts').checked = d.cleanContacts;
+  $('#editorInstruction').value = d.instruction || ''; $('#editorFooter').value = d.footer || ''; $('#editorFooterMode').value = d.footerMode || 'adaptive';
+  $('#editorDomains').value = d.domains || ''; $('#editorTimezone').value = d.timezone || 'Asia/Karachi';
+  editorExampleText = d.example || ''; editorDirty = false;
+}
+loaders.aipilot = async () => { await __aiPilotJ(); loadAiSafety(); await loadEditorSettings().catch(() => {}); };
+$('#editorExample').addEventListener('click', () => { $('#editorInstruction').value = editorExampleText; editorDirty = true; });
+$('#editorSave').addEventListener('click', async () => {
+  try {
+    await api('/api/ai/editor', {method:'POST',body:{enabled:$('#editorEnabled').checked,semantic:$('#editorSemantic').checked,skipAds:$('#editorAds').checked,cleanContacts:$('#editorContacts').checked,instruction:$('#editorInstruction').value,footer:$('#editorFooter').value,footerMode:$('#editorFooterMode').value,domains:$('#editorDomains').value,timezone:$('#editorTimezone').value}});
+    editorDirty = false; toast('AI post settings saved', 'ok');
+  } catch(e) { toast(e.message,'err'); }
+});
+$('#editorTest').addEventListener('click', async () => {
+  const button = $('#editorTest'), output = $('#editorTestResult');
+  if (editorDirty) return toast('Save the settings before testing.', 'err');
+  button.disabled = true; output.textContent = 'Analyzing with saved settings…';
+  try {
+    const r = await api('/api/ai/editor/preview',{method:'POST',body:{text:$('#editorSample').value}});
+    output.textContent = `${r.decision.toUpperCase()} — ${r.reason || ''}\n\n${r.text || ''}${r.footer ? '\n\n'+r.footer : ''}\n\nPreview only — nothing was sent or queued.`;
+  } catch(e) { output.textContent = e.message; }
+  finally { button.disabled = false; }
+});
 {
   const b = $('#aisafetySave');
   if (b) b.addEventListener('click', async () => {

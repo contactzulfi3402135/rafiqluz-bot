@@ -192,7 +192,7 @@ function missedList(opts) { return catchUp({ ...opts, dryRun: true }); }
 /** True when a stored name is real (not empty, not the jid, not bare digits). */
 function validName(name, jid) {
   const n = String(name || '').trim();
-  if (!n) return false;
+  if (!n || /^Channel •\d+$/i.test(n) || n === 'Name unavailable' || n === '[object Object]') return false;
   if (n === String(jid || '')) return false;
   if (/^\d+$/.test(n)) return false;
   if (/^\d+(@[a-z.]+)?$/i.test(n)) return false; // digits with a domain suffix
@@ -214,13 +214,9 @@ async function resolveMissingNames(maxItems = 4) {
   try {
     const sock = wa.getSocket();
     if (!sock || wa.getStatus().status !== 'open') return { resolved, busy: false, noSocket: true };
-    const seen = new Set();
-    const cands = [];
-    for (const row of [...CH.listSources(), ...CH.listTargets(), ...CH.dirList()]) {
-      if (seen.has(row.jid)) continue;
-      seen.add(row.jid);
-      if (!validName(row.name, row.jid)) cands.push(row.jid);
-    }
+    const rows = [...CH.listSources(), ...CH.listTargets(), ...CH.dirList()];
+    const known = new Set(rows.filter(row => validName(row.name, row.jid)).map(row => row.jid));
+    const cands = [...new Set(rows.filter(row => row.jid && String(row.jid).endsWith('@newsletter') && !known.has(row.jid)).map(row => row.jid))];
     const now = Date.now();
     const due = cands.filter((j) => (nameTriedAt.get(j) || 0) + 10 * 60e3 < now).slice(0, maxItems);
     for (const jid of due) {
@@ -236,7 +232,7 @@ async function resolveMissingNames(maxItems = 4) {
       }
       await new Promise((r) => setTimeout(r, 1200)); // pace the metadata queries
     }
-    return { resolved, busy: false };
+    return { resolved, busy: false, attempted: due.length };
   } finally { resolving = false; }
 }
 

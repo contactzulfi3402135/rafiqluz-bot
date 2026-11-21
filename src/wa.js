@@ -173,7 +173,8 @@ async function channelMeta(socket, jid) {
       new Promise((_, rej) => setTimeout(() => rej(new Error('metadata timeout')), 10000))
     ]);
     if (!meta) return null;
-    const name = meta?.name || meta?.thread_metadata?.name?.text || '';
+    const nameText = value => typeof value === 'string' ? value : (typeof value?.text === 'string' ? value.text : '');
+    const name = nameText(meta?.name) || nameText(meta?.thread_metadata?.name);
     const role = String(
       meta?.thread_metadata?.viewer_metadata?.role
       || meta?.viewer_metadata?.role

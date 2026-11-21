@@ -8,6 +8,7 @@
 const { ring } = require('./logger');
 const { S, CH, P, SR, RC, AUD, LAT, P5A, GL } = require('./db');
 const ai = require('./ai');
+const editor = require('./ai-editor');
 const wa = require('./wa');  // runtime-only: socket for media recovery + channel names
 const publishMod = require('./publish');
 const templates = require('./templates');   // v7.5.0: post template formatting (text only)
@@ -278,6 +279,23 @@ async function downloadMedia(m) {
 
 /** Intake — called for every message from a source channel. */
 const inFlight = new Set(); // same message can arrive via message-receive AND messages.upsert
+// Serialize editorial source processing in this process so concurrent incoming
+// posts see earlier accepted posts before semantic comparison. Existing installs
+// keep their original concurrency when the optional editor is off.
+let editorialTail = Promise.resolve();
+async function processWithEditorialLock(m, src, jid, id) {
+  if (!editor.settings().enabled) return processOne(m, src, jid, id);
+  let unlock; const prior = editorialTail;
+  editorialTail = new Promise(resolve => { unlock = resolve; });
+  await prior;
+  try {
+    if (require('./lifecycle').isStopping() || S.getBool('mirror.paused', false) || S.getBool('panic.on', false)) return;
+    const fresh = CH.listActiveSources().find(row => row.jid === jid);
+    if (!fresh || P.seen(jid,id)) return;
+    return await processOne(m, fresh, jid, id);
+  } finally { unlock(); }
+}
+
 
 async function intake(m) {
   try {
@@ -295,7 +313,7 @@ async function intake(m) {
     if (inFlight.has(dedupeKey)) return;               // already being processed (double event)
     inFlight.add(dedupeKey);
     try {
-      await processOne(m, src, jid, id);
+      await processWithEditorialLock(m, src, jid, id);
     } finally {
       inFlight.delete(dedupeKey);
     }
@@ -326,7 +344,7 @@ async function intakeRss({ jid, id, text, ts, title, link, url, sourceName }) {
         message: { extendedTextMessage: { text: body } },
         messageTimestamp: Math.floor(Number(ts) / 1000) || Math.floor(Date.now() / 1000)
       };
-      await processOne(m, src, jid, id);
+      await processWithEditorialLock(m, src, jid, id);
     } finally { inFlight.delete(dedupeKey); }
   } catch (err) {
     ring.error('pipeline.error', `RSS pipeline error (${sourceName || jid}): ${err.message}`);
@@ -578,7 +596,8 @@ async function processOne(m, src, jid, id) {
     }
 
     // near-duplicate guard (smart repost)
-    if (isNearDuplicate(parts.text)) {
+    const editorConfig = editor.settings();
+    if (!editorConfig.enabled && isNearDuplicate(parts.text)) {
       P.mark(jid, id, 'skipped', 'near-duplicate');
       ring.info('post.skip.dedupe', `Near-duplicate skipped — a very similar post was published in the last 12 h (${src.name || jid})`);
       return;
@@ -586,7 +605,7 @@ async function processOne(m, src, jid, id) {
 
     // 5A (R40) — cross-source dedupe: same story from another source in the window
     const norm5a = normalizeText(parts.text);
-    const xHits = crossDedupeHits(norm5a, jid);
+    const xHits = editorConfig.enabled ? null : crossDedupeHits(norm5a, jid);
     if (xHits) {
       P.mark(jid, id, 'skipped', `cross-source duplicate (${xHits.length} source(s) in window)`);
       ring.info('crossdedupe.hit', `Cross-source dedupe: the same story was already published — merged the "via" credit (${src.name || jid})`);
@@ -610,6 +629,19 @@ async function processOne(m, src, jid, id) {
       return;
     }
 
+    // Optional AI editorial policy: only explicit skips are discarded. Unknown,
+    // unavailable or malformed AI results go to human review, preserving media.
+    let editorial = null;
+    if (editorConfig.enabled) {
+      editorial = await editor.analyze(parts.text);
+      if (editorial.decision === 'skip') {
+        P.mark(jid, id, 'skipped', editorial.reason || 'AI editorial skip', parts.text);
+        ring.info('post.skip.editor', `AI editor skipped a source post: ${String(editorial.reason || 'filtered').slice(0,150)}`);
+        return;
+      }
+      if (editorial.decision !== 'publish') ring.warn('post.editor.review', `AI editor needs review: ${String(editorial.reason || 'unknown').slice(0,150)}`);
+    }
+
     // AI pilot gate — fail OPEN (never lose a post because AI is down)
     if (on('aipilot')) {
       const criteria = S.get('power.aipilot.criteria', '');
@@ -626,7 +658,10 @@ async function processOne(m, src, jid, id) {
     // compose (v7.6.0 spec order): clean/beautify → translate → TEMPLATE →
     // hashtags → global header/footer. A template's own header/footer zones
     // override the global ones for that post.
-    let body = await ai.beautify(parts.text, templates.styleHint());
+    let body = editorial ? (editorial.decision === 'publish' ? editorial.text : parts.text) : await ai.beautify(parts.text, templates.styleHint());
+    let final = body;
+    // AI editor owns layout when enabled; old formatting applies otherwise.
+    if (!editorial) {
     if (on('translate')) {
       const lang = String(S.get('ai.translate.lang', '')).trim();
       if (lang) body = await ai.translate(body || parts.text, lang);
@@ -636,7 +671,7 @@ async function processOne(m, src, jid, id) {
        Media is never touched: only the text/caption goes through the template.
        Mode OFF (the default) leaves the post exactly as before. */
     const applied = templates.apply(body || parts.text, { sourceName: src.name || src.jid });
-    let final = applied.text;
+    final = applied.text;
     const tags = hashtagsFor(body || parts.text);
     if (tags && !applied.hasHashtagZone) final = `${final}\n\n${tags}`;
     if (applied.header === '') {
@@ -682,10 +717,17 @@ async function processOne(m, src, jid, id) {
       } catch { /* never fail a post over link cleaning */ }
     }
 
+    } // end legacy text formatting
+
     // 5J (J7) — AI safety screen (OFF by default, R8): an AI criteria review of the
     // FINAL text before it is routed (e.g. "no political content, no ban-risk words").
     // Fail-OPEN like every other AI step — the AI being down never loses a post.
-    let safetyReview = false;
+    if (editorial && editorial.decision === 'publish' && editor.lostOfficialLink(parts.text, final, editorConfig.domains)) {
+      editorial = {decision:'review', reason:'A later formatting step removed a configured official link; review original.', text:parts.text};
+    }
+    if (editorial && editorial.decision !== 'publish') final = parts.text; // preserve original for a human decision
+    if (editorial && editorial.decision === 'publish' && editorial.footer) final = `${final.trim()}\n\n${editorial.footer}`;
+    let safetyReview = Boolean(editorial && editorial.decision !== 'publish');
     if (on('aisafety')) {
       const crit = String(S.get('power.aisafety.criteria', '')).trim();
       if (crit && final.trim()) {
@@ -745,7 +787,11 @@ async function processOne(m, src, jid, id) {
     // queue publishes them through the SAME publisher (verification intact).
     const delayMin = Math.max(0, Math.min(1440, parseInt(S.get('queue.delay.min', '0'), 10) || 0));
     if (safetyReview || (on('queue') && (rule.approve_first || delayMin > 0))) {
-      queue5a.enqueue({ sourceJid: jid, sourceMsgId: id, text: final, mediaBuf, mediaKind, mediaMime, msgTs: m.messageTimestamp || 0, targetJids: targets.map((t) => t.jid), requireApproval: Boolean(rule.approve_first || safetyReview) });
+      const queuedId = queue5a.enqueue({ sourceJid: jid, sourceMsgId: id, text: final, mediaBuf, mediaKind, mediaMime, msgTs: m.messageTimestamp || 0, targetJids: targets.map((t) => t.jid), requireApproval: Boolean(rule.approve_first || safetyReview) });
+      if (editorial && editorial.decision !== 'publish') {
+        const note = 'AI editor review: ' + String(editorial.reason || 'Uncertain decision').slice(0, 200);
+        try { require('./db').open().prepare('UPDATE approvals SET note=? WHERE id=?').run(note, queuedId); const pid = P.postId(jid,id); if (pid) P.setStatus(pid,'queued',note,final); } catch { }
+      }
       try { require('./webhooks').fire('post.queued', { source: src.name || jid, approveFirst: !!rule.approve_first, delayMin }); } catch { } // 5G (R80)
       return;
     }

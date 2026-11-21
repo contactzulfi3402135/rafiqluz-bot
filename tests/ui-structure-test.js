@@ -23,5 +23,9 @@ assert.match(js, /Cloud snapshots do not guarantee recovery/);
 assert.match(login, /autocomplete="username"/);
 assert.match(login, /autocomplete="current-password"/);
 assert.match(css, /prefers-reduced-motion:reduce/);
+for (const section of ['overview','activity','queue','actions','attention','setup']) { assert.match(dash, new RegExp(`data-home-tab=\"${section}\"`)); assert.match(dash, new RegExp(`data-home-panel=\"${section}\"`)); }
+assert.match(js, /preventScroll: true/);
+assert.match(js, /renderChannelList/);
+assert.match(dash, /data-resolve-names/);
 new vm.Script(js, {filename: 'app.js'});
 console.log('PASS: dashboard structure, navigation, accessibility and login regressions');

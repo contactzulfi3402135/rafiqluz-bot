@@ -65,11 +65,6 @@ function build(app) {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     // Arena's preview is intentionally embedded; regular deployments deny framing.
     if (!/\.e2b\.app(?::\d+)?$/i.test(req.get('host') || '')) res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-    // Platform-neutral hardening (additive, v12 Obsidian): no powerful features in
-    // this app, and isolate browsing context from popups it opens itself.
-    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=()');
-    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-    res.setHeader('Origin-Agent-Cluster', '?1');
     if (['GET','HEAD','OPTIONS'].includes(req.method)) return next();
     // Cross-site browser mutations must not use ambient cookie authority.
     if (req.get('sec-fetch-site') === 'cross-site') return res.status(403).json({ok:false,error:'Cross-site request rejected.'});
@@ -118,12 +113,14 @@ function build(app) {
      rule cards and AI context inherited the raw jid). */
   const badName = (n, j) => {
     const x = String(n || '').trim();
-    return !x || x === j || /^\d+$/.test(x) || /^\d+(@[a-z.]+)?$/i.test(x);
+    return !x || x === j || /^\d+$/.test(x) || /^\d+(@[a-z.]+)?$/i.test(x) || /^Channel •\d+$/i.test(x) || x === 'Name unavailable' || x === '[object Object]';
   };
-  const maskedName = (jid) => 'Channel •' + String(jid).split('@')[0].slice(-4);
+  const maskedName = () => 'Name unavailable';
   const displayName = (jid) => {
     const sname = CH.listSources().find((x) => x.jid === jid)?.name;
     if (!badName(sname, jid)) return sname;
+    const tname = CH.listTargets().find((x) => x.jid === jid)?.name;
+    if (!badName(tname, jid)) return tname;
     const dname = CH.dirList().find((x) => x.jid === jid)?.name;
     if (!badName(dname, jid)) return dname;
     try { const ct = CT.nameOf('main', jid); if (!badName(ct, jid)) return ct; } catch { }
@@ -139,12 +136,14 @@ function build(app) {
     const anyBad = [...CH.listSources(), ...CH.listTargets(), ...CH.dirList()].some((r) => badName(r.name, r.jid));
     if (!anyBad) return;
     nameResolveQueued = true;
-    channels.resolveMissingNames(6).then(({ resolved }) => {
+    let continueBatch = false;
+    channels.resolveMissingNames(6).then(({ resolved, attempted }) => {
+      continueBatch = attempted === 6;
       if (resolved && resolved.length) {
         ring.info('web.names', `Recovered ${resolved.length} channel name(s) (${tag}): ${resolved.map((r) => r.name).join(', ').slice(0, 120)}`);
         ssePush('channels', { reason: 'renamed', jids: resolved.map((r) => r.jid) }); // v1.2: no throttle — a dropped state change = stale UI
       }
-    }).catch(() => { }).finally(() => { nameResolveQueued = false; });
+    }).catch(() => { }).finally(() => { nameResolveQueued = false; if (continueBatch) setTimeout(() => maybeResolveNames('next batch'), 1000).unref(); });
   };
 
   const sseClients = new Set();
@@ -348,36 +347,12 @@ function build(app) {
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
 
-  /* v12 Obsidian: build & runtime fingerprint for the About screen and the
-     premium status pill. Read-only, no secrets — safe for any signed-in role. */
-  api.get('/meta', (req, res) => {
-    const mem = process.memoryUsage();
-    res.json({
-      ok: true,
-      name: 'raqifluz-channel-bot',
-      version: cfg.config.version,
-      codename: 'Obsidian',
-      node: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      pid: process.pid,
-      env: process.env.NODE_ENV || 'production',
-      uptimeSec: Math.round(process.uptime()),
-      rssMB: Math.round(mem.rss / 1048576),
-      heapUsedMB: Math.round(mem.heapUsed / 1048576),
-      startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
-      now: new Date().toISOString(),
-      timezone: 'Asia/Karachi (UTC+5)',
-      license: 'MIT'
-    });
-  });
-
   /* ---- sources / targets / directory ---- */
   for (const [kind, add] of [['sources', (i, fast) => resolveAndAdd(i, 'sources', fast)], ['targets', (i, fast) => resolveAndAdd(i, 'targets', fast)]]) {
     api.get(`/${kind}`, (req, res) => {
       /* v1.2: if the list still carries numeric names, recover the real ones
          from WhatsApp in the background (SSE notifies the tabs on success). */
-      if (kind === 'sources') maybeResolveNames('sources list');
+      maybeResolveNames(kind + ' list');
       /* v7.3.3: a channel must never show as a raw number — displayName()
          resolves sources → directory → contacts → masked "Channel •last4". */
       res.json({
@@ -444,6 +419,7 @@ function build(app) {
   api.post('/channels/resolve-names', async (req, res) => {
     try {
       const r = await channels.resolveMissingNames(10);
+      if (r.resolved && r.resolved.length) ssePush('channels', { reason: 'renamed', jids: r.resolved.map(x => x.jid) });
       res.json({ ok: true, ...r });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
@@ -579,6 +555,19 @@ function build(app) {
     res.json({ ok: true, rules });
   });
   api.post('/power/aipilot', (req, res) => { S.set('power.aipilot.criteria', String(req.body?.criteria || '').slice(0, 500)); res.json({ ok: true }); });
+  /* AI editorial settings are additive and OFF until the owner enables them. */
+  api.get('/ai/editor', (_req, res) => res.json({ok:true, ...require('../ai-editor').settings()}));
+  api.post('/ai/editor', (req,res) => { try {
+    const saved = require('../ai-editor').save(req.body || {});
+    AUD.log('owner','ai.editor.settings',`AI editorial policy ${saved.enabled ? 'enabled' : 'disabled'}`);
+    res.json({ok:true,...saved});
+  } catch (err) { res.status(400).json({ok:false,error:err.message}); } });
+  api.post('/ai/editor/preview', async (req,res) => { try {
+    const text = String(req.body?.text || '').trim();
+    if (!text) return res.status(400).json({ok:false,error:'Enter sample source text first.'});
+    const result = await require('../ai-editor').analyze(text,{preview:true});
+    res.json({ok:true,...result});
+  } catch (err) { res.status(400).json({ok:false,error:err.message}); } });
   /* ---- 5J (J7): AI safety screen criteria (the switch itself rides /api/power/toggle) ---- */
   api.get('/power/aisafety', (req, res) => res.json({ ok: true, criteria: S.get('power.aisafety.criteria', ''), unavailable: S.get('power.aisafety.unavailable', 'open') }));
   api.post('/power/aisafety', (req, res) => { S.set('power.aisafety.criteria', String(req.body?.criteria || '').slice(0, 500)); if (['open','review'].includes(req.body?.unavailable)) S.set('power.aisafety.unavailable', req.body.unavailable); try { AUD.log('owner', 'aisafety.save', `AI safety screen criteria saved (${String(req.body?.criteria || '').length} chars)`); } catch { } res.json({ ok: true }); });

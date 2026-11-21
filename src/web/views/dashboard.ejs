@@ -27,7 +27,7 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=workspace-2">
+<link rel="stylesheet" href="/app.css?v=editor-2">
 </head>
 <body>
 <a class="skip-link" href="#content">Skip to content</a>
@@ -160,18 +160,31 @@ try {
 
       <!-- ═══ OVERVIEW · DASHBOARD ═══ -->
       <section class="view" data-view="home">
-        <!-- Reference home shell: eyebrow + greeting + live badge + New post -->
+        <div class="home-top">
+        <!-- Greeting and mirroring status share the first row on desktop. -->
         <div class="page-heading">
           <div><div class="eyebrow">OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Monitor your connection, channels, and publishing activity.</p></div>
-          <div class="heading-actions"><span class="live-badge" id="homeState"><i></i><span>Checking status</span></span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
         </div>
         <div class="card pausebar" id="pauseBar" data-hov>
           <div class="pb-t"><b id="pauseHead">Checking mirroring status…</b><span class="muted" id="pauseSub">Every source → every target, automatically.</span></div>
           <button class="btn btn-d" id="pauseBtn"><%- icon('pause','icon icon-xs') %> <span>Pause all mirroring</span></button>
+          <div class="heading-actions"><span class="live-badge" id="homeState"><i></i><span>Checking status</span></span><button class="btn btn-p" id="homeNewPost" data-goview="newpost"><%- icon('plus','icon icon-xs') %> New post</button></div>
         </div>
-        <div id="cloudNote"></div>
+        </div>
+        <nav class="home-tabs" aria-label="Dashboard sections">
+          <button class="home-tab on" type="button" data-home-tab="overview" aria-pressed="true">Overview</button>
+          <button class="home-tab" type="button" data-home-tab="activity" aria-pressed="false">Activity</button>
+          <button class="home-tab" type="button" data-home-tab="queue" aria-pressed="false">Queue &amp; health</button>
+          <button class="home-tab" type="button" data-home-tab="actions" aria-pressed="false">Actions &amp; backup <span id="homeBackupState" class="home-backup-state">Checking backup…</span></button>
+          <button class="home-tab" type="button" data-home-tab="attention" aria-pressed="false">Status checks</button>
+          <button class="home-tab" type="button" data-home-tab="setup" aria-pressed="false">Setup &amp; connection</button>
+        </nav>
+        <div class="home-panel" data-home-panel="overview">
         <div class="overview-heading"><div><span class="section-kicker">AT A GLANCE</span><h2>Workspace overview</h2></div><span>Live activity and status</span></div>
         <div class="kpis kpi-grid" id="kpiGrid"></div>
+        </div>
+        <div class="home-panel home-attention" data-home-panel="actions" hidden>
+        <div id="cloudNote"></div>
         <section class="quick-actions" aria-labelledby="quickActionsTitle">
           <div class="quick-heading"><div><span class="section-kicker">GET THINGS DONE</span><h2 id="quickActionsTitle">Quick actions</h2></div><span>Your most-used tools, one click away.</span></div>
           <div class="quick-grid">
@@ -181,12 +194,14 @@ try {
             <button type="button" class="quick-item" data-goview="settings"><span class="quick-icon"><%- icon('settings') %></span><span class="quick-copy"><strong>Open settings</strong><small>Control your workspace</small></span><span class="quick-arrow" aria-hidden="true">↗</span></button>
           </div>
         </section>
+        </div>
+        <div class="home-panel" data-home-panel="attention" hidden>
         <section class="ops-brief" aria-labelledby="opsBriefTitle">
           <div class="ops-brief-head"><div><div class="eyebrow">YOUR WORKSPACE</div><h2 id="opsBriefTitle">What needs attention</h2><p>Live checks and the next useful action, in one place.</p></div><button type="button" class="btn btn-g" data-goview="health">Open system health →</button></div>
           <div id="opsBriefItems" class="ops-brief-items" aria-live="polite"><div class="ops-brief-loading">Checking your workspace…</div></div>
         </section>
-        <!-- Signal Desk §1.3: read-only automation chips — state only, deep-link to the owner -->
-        <div class="rosw-row" id="homeSwitchChips" hidden></div>
+        </div>
+        <div class="home-panel" data-home-panel="activity" hidden>
         <!-- Reference home grid: activity + queue + health + pacing + recent, all real data -->
         <div class="home-grid">
           <div class="home-col home-col-main">
@@ -203,6 +218,9 @@ try {
               <div class="card-b"><div class="tl" id="activityFeed"></div></div>
             </div>
           </div>
+        </div>
+        </div>
+        <div class="home-panel" data-home-panel="queue" hidden>
           <div class="home-col home-col-side">
             <div class="card queue-panel">
               <div class="card-h"><%- icon('inbox','icon') %> Queue status <span class="muted tiny">— items that need attention</span></div>
@@ -218,6 +236,9 @@ try {
             </div>
           </div>
         </div>
+        <div class="home-panel home-setup" data-home-panel="setup" hidden>
+        <div class="card home-setup-intro"><div><h2>Setup &amp; connection</h2><p class="muted">Link your account and continue your setup when you are ready.</p></div><button class="btn" type="button" id="homeOpenWizard">Open setup wizard</button></div>
+        <div class="rosw-row" id="homeSwitchChips" hidden></div>
         <div class="card qr-card" id="qrCard" hidden>
           <%- icon('chat','icon icon-xl') %>
           <h3>Link WhatsApp</h3>
@@ -236,6 +257,7 @@ try {
             </div>
           </div>
         </div>
+        </div>
       </section>
 
       <!-- ═══ CHANNELS · SOURCES ═══ -->
@@ -248,6 +270,7 @@ try {
         <div class="ph">
           <div class="ph-l"><h2>Sources</h2><div class="ph-d">Channels the bot follows — every post they make is mirrored to your targets.</div></div>
           <div class="ph-a">
+            <button class="btn btn-sm btn-g" type="button" data-resolve-names>Refresh names</button>
             <span class="sync-meta" id="srcSync"><span id="srcSyncTime">Last synced —</span><button class="btn btn-sm btn-g" id="srcRefresh" title="Re-sync your followed channels now"><%- icon('refresh','icon icon-xs') %> Refresh</button></span>
           </div>
         </div>
@@ -339,6 +362,7 @@ try {
         <div class="ph">
           <div class="ph-l"><h2>Targets</h2><div class="ph-d">Your channels — everything the bot publishes goes here.</div></div>
           <div class="ph-a">
+            <button class="btn btn-sm btn-g" type="button" data-resolve-names>Refresh names</button>
             <span class="sync-meta" id="tgtSync"><span id="tgtSyncTime">Last synced —</span><button class="btn btn-sm btn-g" id="tgtRefresh" title="Re-sync your channels now"><%- icon('refresh','icon icon-xs') %> Refresh</button></span>
           </div>
         </div>
@@ -927,6 +951,26 @@ try {
               <input class="in" id="aipilotInput" placeholder="e.g. only government job announcements in Punjab">
               <button class="btn btn-p" id="aipilotSave">Save rule</button>
             </div>
+          </div>
+        </div>
+        <div class="card editorial-card" id="editorSettings">
+          <div class="card-h">AI post instructions <%- icon('bot','icon') %><span class="muted tiny">— understands meaning, not just a fixed pattern</span></div>
+          <div class="card-b">
+            <p class="muted tiny">Optional and off until enabled. Incoming source text and same-day published text are sent to your selected AI provider. Requires an AI key and <b>AI content sharing</b> enabled in Settings → AI. AI can make mistakes: test and review results.</p>
+            <label class="editor-check"><input type="checkbox" id="editorEnabled"> <span><b>Enable AI post instructions</b><small>Analyze and rewrite incoming source posts before routing.</small></span></label>
+            <div class="field"><label for="editorInstruction"><b>Your instructions to AI</b></label><textarea class="in" id="editorInstruction" rows="7" maxlength="6000" placeholder="Tell AI in your own words what posts to make, when to skip, how to rewrite and beautify, how to use your details, and how to format each post."></textarea><span class="muted tiny">Your instructions drive the decisions. You can also tell the assistant to change these instructions with Bot control on. The example is optional; it is not a fixed rule.</span><button type="button" class="btn btn-sm btn-g" id="editorExample">Use example instructions</button></div>
+            <details><summary>Optional shortcuts</summary>
+              <label class="editor-check"><input type="checkbox" id="editorSemantic"> <span><b>Skip same-day semantic duplicates</b><small>Optional shortcut; you can instead specify your own duplicate policy in your instructions.</small></span></label>
+              <label class="editor-check"><input type="checkbox" id="editorAds"> <span><b>Skip private advertising</b><small>Optional shortcut; off unless selected.</small></span></label>
+              <label class="editor-check"><input type="checkbox" id="editorContacts"> <span><b>Remove personal contacts and unofficial promotions</b><small>Optional shortcut; off unless selected.</small></span></label>
+            </details>
+            <div class="field"><label for="editorDomains">Official domains to preserve</label><input class="in" id="editorDomains" maxlength="1500" placeholder="e.g. ppsc.gop.pk, admissions.university.edu.pk"><span class="muted tiny">Separate domains with commas. A missing listed official link is held for review.</span></div>
+            <div class="field"><label for="editorFooter">Your details for AI to use</label><textarea class="in" id="editorFooter" rows="3" maxlength="1200" placeholder="Your channel number, bot number, channel link, or other details"></textarea><span class="muted tiny">Provide only details you want used. Tell AI in your instructions when and how to use them; it can adapt the footer to each post.</span></div>
+            <div class="field"><label for="editorFooterMode">Footer behavior</label><select class="in" id="editorFooterMode"><option value="adaptive">AI decides from my instructions (adaptive)</option><option value="fixed">Append my details exactly (fixed)</option></select><span class="muted tiny">Existing saved footers retain fixed mode until you choose adaptive.</span></div>
+            <div class="field"><label for="editorTimezone">Calendar-day time zone</label><input class="in" id="editorTimezone" maxlength="80" placeholder="Asia/Karachi"></div>
+            <p class="muted tiny">If AI is unavailable, uncertain, or cannot analyze media-only posts, the item is held for human review in Queue even when ordinary queue automation is off. Same-day checks are best-effort and compare saved text; multiple bot processes or already-pending posts can still create duplicates. Source filters, AI Pilot, routing and safety checks remain active. While AI post instructions are enabled, the AI controls formatting instead of the older template, translation, header and signature tools.</p>
+            <button type="button" class="btn btn-p" id="editorSave">Save AI post settings</button>
+            <div class="field" style="margin-top:18px"><label for="editorSample">Test saved settings without sending</label><textarea class="in" id="editorSample" rows="3" placeholder="Paste a sample source post"></textarea><button type="button" class="btn" id="editorTest">Analyze sample</button><pre id="editorTestResult" class="editor-result" aria-live="polite"></pre></div>
           </div>
         </div>
         <!-- 5J (J7): AI safety screen — OFF by default (R8) -->
@@ -1939,6 +1983,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=workspace-2"></script>
+<script src="/app.js?v=editor-2"></script>
 </body>
 </html>
