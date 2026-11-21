@@ -204,16 +204,39 @@ setInterval(notifBadge, 60000);
 (function shell() {
   const app = $('#app');
   const collapse = $('#sbCollapse') || $('#sideCollapse');
+  const setCollapseLabel = () => {
+    if (!collapse) return;
+    const min = app.classList.contains('side-min');
+    collapse.setAttribute('aria-pressed', String(min));
+    collapse.setAttribute('aria-label', min ? 'Expand sidebar' : 'Collapse sidebar');
+    collapse.title = min ? 'Expand sidebar' : 'Collapse sidebar';
+  };
   if (collapse) collapse.addEventListener('click', () => {
-    app.classList.toggle('side-min');
+    app.classList.toggle('side-min'); setCollapseLabel();
     try { localStorage.setItem('rc-side', app.classList.contains('side-min') ? 'min' : 'full'); } catch (e) {}
   });
-  /* restore the persisted rail state (reference: the collapse control is in the brand lockup) */
   try { if (localStorage.getItem('rc-side') === 'min') app.classList.add('side-min'); } catch (e) {}
-  const menu = $('#menuBtn');
-  if (menu) menu.addEventListener('click', () => app.classList.toggle('side-open'));
-  const scrim = $('#sideScrim');
-  if (scrim) scrim.addEventListener('click', () => app.classList.remove('side-open'));
+  setCollapseLabel();
+  $$('#sidebar .sb-item').forEach(item => { if (item.dataset.lbl) item.setAttribute('aria-label', item.dataset.lbl); });
+  const menu = $('#menuBtn'), sidebar = $('#sidebar'), scrim = $('#sideScrim');
+  const mobile = matchMedia('(max-width: 767px)');
+  const syncNav = () => {
+    const open = mobile.matches && app.classList.contains('side-open');
+    if (menu) { menu.setAttribute('aria-expanded', String(open)); menu.setAttribute('aria-label', open ? 'Close navigation' : 'Open navigation'); }
+    if (sidebar) sidebar.inert = mobile.matches && !open;
+  };
+  const setDrawer = (open) => {
+    const returnFocus = !open && mobile.matches && sidebar && sidebar.contains(document.activeElement);
+    app.classList.toggle('side-open', Boolean(open)); syncNav();
+    if (returnFocus && menu) menu.focus();
+  };
+  window.__closeNav = () => setDrawer(false);
+  if (menu) menu.addEventListener('click', () => setDrawer(!app.classList.contains('side-open')));
+  if (scrim) scrim.addEventListener('click', () => setDrawer(false));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && app.classList.contains('side-open')) { setDrawer(false); if (menu) menu.focus(); } });
+  if (mobile.addEventListener) mobile.addEventListener('change', () => { if (!mobile.matches) app.classList.remove('side-open'); syncNav(); });
+  else if (mobile.addListener) mobile.addListener(syncNav);
+  syncNav();
   /* settings mini-nav: one section at a time, remembered */
   const setNav = $('#setNav');
   let savedG = null; try { savedG = localStorage.getItem('rc-setgroup'); } catch (e) {}
@@ -279,16 +302,19 @@ function show(view) {
   /* v1.1: merged nav items (data-views family) stay lit across their tabs; in-view tab rows track too */
   $$('#sidebar .sb-item').forEach((a) => {
     const fam = a.dataset.views ? a.dataset.views.split(',') : null;
-    a.classList.toggle('on', fam ? fam.includes(view) : a.dataset.view === view);
+    const active = fam ? fam.includes(view) : a.dataset.view === view;
+    a.classList.toggle('on', active);
+    if (active) { a.setAttribute('aria-current', 'page'); const group = a.closest('details'); if (group) group.open = true; }
+    else a.removeAttribute('aria-current');
   });
   $$('#sidebar .sb-group').forEach((g) => g.classList.toggle('on', g.dataset.group === area));
-  $$('.vtab').forEach((t) => t.classList.toggle('on', t.dataset.go === view));
-  $$('.bt').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
+  $$('.vtab').forEach((t) => { const active = t.dataset.go === view; t.classList.toggle('on', active); t.setAttribute('aria-selected', String(active)); });
+  $$('.bt').forEach((a) => { const active = a.dataset.view === view; a.classList.toggle('on', active); if (active) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   $('#viewTitle').textContent = TITLES[view];
   /* Reference top bar: breadcrumb = GROUP / Screen */
   const cg = $('#crumbGroup');
   if (cg) cg.textContent = (GROUP_LABEL[area] || 'OVERVIEW');
-  $('#app').classList.remove('side-open');
+  if (window.__closeNav) window.__closeNav(); else $('#app').classList.remove('side-open');
   const content = $('#content');
   if (content) content.scrollTop = 0;
   try { localStorage.setItem('rc-view', view); } catch (e) {}
@@ -418,7 +444,7 @@ setInterval(pollStatus, 30000);
     /* sidebar paired-identity card mirrors the same state */
     const t = $('#pairedTitle'), s = $('#pairedSub'), pd = $('#pairedDot');
     if (t) t.textContent = status === 'open' ? 'WhatsApp linked' : 'WhatsApp';
-    if (s) s.textContent = status === 'open' ? 'Owner identity · Linked once' : 'Link from Home — one scan, never again';
+    if (s) s.textContent = status === 'open' ? 'Owner identity · Linked once' : 'Link from Home when needed';
     if (pd) pd.dataset.s = status;
   };
   /* v1.1: unified connection pill — one control, not two. Click → the QR (or the inbox when linked) */
@@ -556,8 +582,7 @@ setInterval(pollStatus, 30000);
     const g = e.target.closest('[data-goview]');
     if (!g) return;
     const view = g.dataset.goview;
-    const item = $$('.sb-item').find((a) => a.dataset.view === view);
-    if (item) item.click();
+    if (TITLES[view] || LEGACY_VIEWS[view]) { e.preventDefault(); show(view); }
   });
   /* Appearance settings and quick switch stay in sync. */
   const tr = $('#themeRadios');
@@ -1160,7 +1185,7 @@ function cloudTestWire(root) {
       const info = d.repoUsed && d.repoUsed !== d.repo ? `<div class="muted tiny" style="margin-top:4px">Using cleaned repo name: <b>${esc(d.repoUsed)}</b> (was "${esc(d.repo)}")</div>` : '';
       root.querySelector('#cloudVerdict').innerHTML = head + info + list;
     } catch (e) { root.querySelector('#cloudVerdict').textContent = e.message; }
-    tbtn.disabled = false; tbtn.textContent = 'Test cloud memory';
+    tbtn.disabled = false; tbtn.textContent = 'Check backup';
   };
 }
 function cloudBanner(cs) {
@@ -1168,14 +1193,10 @@ function cloudBanner(cs) {
   if (!box) return;
   if (!cs) { box.innerHTML = ''; return; }
   if (!cs.enabled) {
-    box.innerHTML = `<div class="card cloud-note bad">
-      <b>Cloud memory is off — protect your data before deploying.</b>
-      <p class="muted tiny" style="margin:6px 0 0">Cloud memory saves this bot's WhatsApp login to your GitHub repo and reloads it before connecting.
-      Turn it on once: Heroku → Settings → Config Vars → add <code>PERSIST_GITHUB_REPO</code> (your-user/your-repo),
-      <code>PERSIST_GITHUB_TOKEN</code> (GitHub token with repo access) and optionally <code>PERSIST_GITHUB_BRANCH</code>=bot-state.
-      Use a private repository and test sync and recovery. Cloud sync reduces restart risk but does not guarantee recovery.</p>
-      <div style="margin-top:8px"><button class="btn btn-sm" id="cloudTest">Test cloud memory</button></div>
-      <div id="cloudVerdict" class="tiny" style="margin-top:6px"></div></div>`;
+    box.innerHTML = `<div class="cloud-alert" role="status">
+      <span class="cloud-alert-icon" aria-hidden="true">!</span>
+      <div class="cloud-alert-copy"><strong>Cloud backup is off</strong><span>Keep a separate backup before deploying. Cloud snapshots do not guarantee recovery.</span><details class="cloud-help"><summary>How to configure</summary><p>In Heroku Settings → Config Vars, add <code>PERSIST_GITHUB_REPO</code> (your-user/your-repo), <code>PERSIST_GITHUB_TOKEN</code>, and optionally <code>PERSIST_GITHUB_BRANCH</code> (defaults to bot-state). Use a private repository, then test both sync and recovery.</p></details><div id="cloudVerdict" class="tiny" aria-live="polite"></div></div>
+      <button type="button" class="btn btn-sm" id="cloudTest">Check backup</button></div>`;
     cloudTestWire(box);
     return;
   }
@@ -5718,7 +5739,7 @@ function applyLang(lang) {
     { t: 'Welcome', done: null,
       body: '<p class="wiz-p">Welcome to <b>Raqifluz</b>. Five minutes to your first published post: link WhatsApp, pick one source and one target, then publish. Every automation is OFF by default — you switch on only what you want, each from its one home.</p><p class="wiz-p"><button class="btn btn-g btn-sm" id="wizTourBtn">Take the 60-second tour instead</button></p>' },
     { t: 'Link WhatsApp', done: (st) => st.status === 'open',
-      body: '<p class="wiz-p">Open <b>Home</b> and scan the QR code with WhatsApp → Linked devices. One scan is enough — cloud memory keeps it alive across deploys.</p><p class="wiz-p"><button class="btn btn-p" id="wizGoHome">Open Home</button></p>' },
+      body: '<p class="wiz-p">Open <b>Home</b> and scan the QR code with WhatsApp → Linked devices. Scan when prompted. Keep a verified backup; reconnecting may sometimes be needed.</p><p class="wiz-p"><button class="btn btn-p" id="wizGoHome">Open Home</button></p>' },
     { t: 'Add your first source', done: (ov) => (ov.sources || 0) > 0,
       body: '<p class="wiz-p">A <b>source</b> is a channel the bot follows — every post it makes gets mirrored to your targets.</p><p class="wiz-p"><button class="btn btn-p" id="wizGoSrc">Add a source</button></p>' },
     { t: 'Add your first target', done: (ov) => (ov.targets || 0) > 0,

@@ -7,7 +7,7 @@
 <title><%= botName %> · v<%= version %></title>
 <!-- 5G (R83): PWA — installable, offline shell, quick shortcuts -->
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#0B0F14">
+<meta name="theme-color" content="#0b1220">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -27,10 +27,10 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=12.0.0">
-<link rel="stylesheet" href="/premium.css?v=12.0.0">
+<link rel="stylesheet" href="/app.css?v=workspace-2">
 </head>
 <body>
+<a class="skip-link" href="#content">Skip to content</a>
 <div class="app" id="app">
 
   <!-- ═══ SIGNAL DESK RAIL (v9.1.0) ═══
@@ -45,7 +45,7 @@ try {
         <span class="sb-name" id="brandName"><%= botName %></span>
         <span class="brand-sub">SIGNAL DESK</span>
       </span>
-      <button class="icon-btn sb-collapse" id="sbCollapse" title="Collapse sidebar" aria-label="Collapse sidebar"><%- icon('menu','icon icon-sm') %></button>
+      <button class="icon-btn sb-collapse" id="sbCollapse" title="Collapse sidebar" aria-label="Collapse sidebar" aria-controls="sidebar" aria-pressed="false"><%- icon('menu','icon icon-sm') %></button>
     </div>
     <!-- Reference: one-line health state under the brand (full report: Insights · Health) -->
     <div class="side-health" id="sideHealth" title="Eight operational checks — full report in System Health & Logs">
@@ -116,15 +116,15 @@ try {
   <div class="main">
     <!-- Reference top bar: breadcrumb · command search · top actions (connection pill, bell, panic) -->
     <header class="topbar">
-      <button class="icon-btn menu-btn" id="menuBtn" title="Menu" aria-label="Menu"><%- icon('menu') %></button>
+      <button class="icon-btn menu-btn" id="menuBtn" title="Menu" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><%- icon('menu') %></button>
       <div class="breadcrumb" id="breadcrumb">
         <span id="crumbGroup">COMMAND</span><b>/</b><h1 class="tb-title" id="viewTitle">Dashboard</h1>
       </div>
       <div class="tb-right top-actions">
         <button class="design-switch" id="designQuick" type="button" title="Change design style"><span aria-hidden="true">◈</span> <span id="designQuickLabel">Studio</span></button>
-        <span class="connection-pill" id="connPill" title="WhatsApp connection status">
+        <button type="button" class="connection-pill" id="connPill" title="WhatsApp connection status" aria-label="WhatsApp connection status">
           <span class="health-dot" id="connDot"></span><span id="connState">Checking…</span><span class="muted">·</span><strong id="connName"><%= botName %> Primary</strong>
-        </span>
+        </button>
         <span class="ro-chip" id="roChip" hidden>READ-ONLY</span>
         <button class="icon-btn bell-btn notification-button" id="notifBtn" title="Notifications" aria-label="Notifications">
           <%- icon('bell','icon icon-sm') %><span class="bell-badge" id="notifBadge" hidden>0</span>
@@ -156,11 +156,10 @@ try {
 
     <!-- Signal Desk: no inner-tab row — every screen lives in the 8-group sidebar (§1.3) -->
 
-    <main class="content" id="content">
+    <main class="content" id="content" tabindex="-1">
 
       <!-- ═══ OVERVIEW · DASHBOARD ═══ -->
       <section class="view" data-view="home">
-        <div id="cloudNote"></div>
         <!-- Reference home shell: eyebrow + greeting + live badge + New post -->
         <div class="page-heading">
           <div><div class="eyebrow">OVERVIEW</div><h1 id="homeGreeting">Good day, Admin.</h1><p id="homeSub">Monitor your connection, channels, and publishing activity.</p></div>
@@ -170,11 +169,22 @@ try {
           <div class="pb-t"><b id="pauseHead">Checking mirroring status…</b><span class="muted" id="pauseSub">Every source → every target, automatically.</span></div>
           <button class="btn btn-d" id="pauseBtn"><%- icon('pause','icon icon-xs') %> <span>Pause all mirroring</span></button>
         </div>
+        <div id="cloudNote"></div>
+        <div class="overview-heading"><div><span class="section-kicker">AT A GLANCE</span><h2>Workspace overview</h2></div><span>Live activity and status</span></div>
+        <div class="kpis kpi-grid" id="kpiGrid"></div>
+        <section class="quick-actions" aria-labelledby="quickActionsTitle">
+          <div class="quick-heading"><div><span class="section-kicker">GET THINGS DONE</span><h2 id="quickActionsTitle">Quick actions</h2></div><span>Your most-used tools, one click away.</span></div>
+          <div class="quick-grid">
+            <button type="button" class="quick-item" data-goview="newpost"><span class="quick-icon"><%- icon('pen') %></span><span class="quick-copy"><strong>Compose a post</strong><small>Write and publish</small></span><span class="quick-arrow" aria-hidden="true">↗</span></button>
+            <button type="button" class="quick-item" data-goview="approvals"><span class="quick-icon"><%- icon('inbox') %></span><span class="quick-copy"><strong>Review queue</strong><small>See what's waiting</small></span><span class="quick-arrow" aria-hidden="true">↗</span></button>
+            <button type="button" class="quick-item" data-goview="sources"><span class="quick-icon"><%- icon('radio') %></span><span class="quick-copy"><strong>Manage channels</strong><small>Sources and targets</small></span><span class="quick-arrow" aria-hidden="true">↗</span></button>
+            <button type="button" class="quick-item" data-goview="settings"><span class="quick-icon"><%- icon('settings') %></span><span class="quick-copy"><strong>Open settings</strong><small>Control your workspace</small></span><span class="quick-arrow" aria-hidden="true">↗</span></button>
+          </div>
+        </section>
         <section class="ops-brief" aria-labelledby="opsBriefTitle">
           <div class="ops-brief-head"><div><div class="eyebrow">YOUR WORKSPACE</div><h2 id="opsBriefTitle">What needs attention</h2><p>Live checks and the next useful action, in one place.</p></div><button type="button" class="btn btn-g" data-goview="health">Open system health →</button></div>
           <div id="opsBriefItems" class="ops-brief-items" aria-live="polite"><div class="ops-brief-loading">Checking your workspace…</div></div>
         </section>
-        <div class="kpis kpi-grid" id="kpiGrid"></div>
         <!-- Signal Desk §1.3: read-only automation chips — state only, deep-link to the owner -->
         <div class="rosw-row" id="homeSwitchChips" hidden></div>
         <!-- Reference home grid: activity + queue + health + pacing + recent, all real data -->
@@ -1929,7 +1939,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=12.0.0"></script>
-<script src="/premium.js?v=12.0.0" defer></script>
+<script src="/app.js?v=workspace-2"></script>
 </body>
 </html>

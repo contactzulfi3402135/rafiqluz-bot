@@ -5,9 +5,9 @@
      network-only — the dashboard is LIVE data; caching it would lie to the
      owner. Offline, the shell opens and says the network is down. */
 'use strict';
-const VERSION = 'raqifluz-obsidian-v4';
+const VERSION = 'raqifluz-workspace-v4';
 const SHELL = '/sw.js';
-const STATIC = ['/manifest.webmanifest', '/app.js', '/app.css', '/premium.css', '/premium.js', '/brand/aurora.jpg', '/pwa/icon-192.png', '/pwa/icon-512.png'];
+const STATIC = ['/manifest.webmanifest', '/app.js', '/app.css', '/pwa/icon-192.png', '/pwa/icon-512.png'];
 
 self.addEventListener('install', (ev) => {
   ev.waitUntil(caches.open(VERSION).then((c) => c.addAll([SHELL, ...STATIC])).catch(() => { })).then(() => self.skipWaiting());

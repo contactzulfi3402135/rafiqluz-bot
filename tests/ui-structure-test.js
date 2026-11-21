@@ -1,0 +1,27 @@
+'use strict';
+// Fast, state-free regressions for the dashboard workspace shell.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const root = path.join(__dirname, '..');
+const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+const dash = read('src/web/views/dashboard.ejs');
+const login = read('src/web/views/login.ejs');
+const js = read('src/web/assets/app.js');
+const css = read('src/web/assets/app.css');
+const ids = [...dash.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+assert.equal(new Set(ids).size, ids.length, 'dashboard template has duplicate IDs');
+for (const id of ['sidebar', 'menuBtn', 'sbCollapse', 'content', 'connPill', 'cloudNote', 'kpiGrid', 'pauseBar', 'pauseBtn', 'opsBriefItems', 'qrCard', 'wizScrim']) assert.ok(ids.includes(id), `missing #${id}`);
+for (const view of ['home','newpost','approvals','scheduled','sources','targets','settings','health','whatsapp']) assert.match(dash, new RegExp(`class="view" data-view="${view}"`), `missing view ${view}`);
+for (const view of ['newpost','approvals','sources','settings']) assert.match(dash, new RegExp(`class="quick-item" data-goview="${view}"`));
+assert.match(dash, /id="menuBtn"[^>]*aria-expanded="false"/);
+assert.match(dash, /<button[^>]*id="connPill"/);
+assert.match(js, /sidebar\.inert = mobile\.matches && !open/);
+assert.match(js, /if \(TITLES\[view\] \|\| LEGACY_VIEWS\[view\]\)/);
+assert.match(js, /Cloud snapshots do not guarantee recovery/);
+assert.match(login, /autocomplete="username"/);
+assert.match(login, /autocomplete="current-password"/);
+assert.match(css, /prefers-reduced-motion:reduce/);
+new vm.Script(js, {filename: 'app.js'});
+console.log('PASS: dashboard structure, navigation, accessibility and login regressions');
