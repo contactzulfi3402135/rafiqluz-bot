@@ -1,7 +1,7 @@
 {
   "name": "raqifluz-channel-bot",
-  "version": "11.5.0",
-  "description": "Raqifluz Channel Bot v6 — hands-off WhatsApp channel mirroring: follow → clean → publish, with power tools behind owner switches",
+  "version": "12.0.0",
+  "description": "Raqifluz Channel Bot \u2014 the WhatsApp channel mirroring console: follow \u2192 clean \u2192 publish, with queues, guardrails, analytics and a premium web dashboard",
   "main": "src/index.js",
   "license": "MIT",
   "private": true,
@@ -10,7 +10,9 @@
   },
   "scripts": {
     "start": "node --max-old-space-size=320 src/index.js",
-    "test": "node tests/backup-test.js && node tests/archive-test.js && node tests/delivery-test.js && node tests/persist-media-test.js && node tests/migration-test.js && node tests/web-delivery-test.js"
+    "dev": "node --max-old-space-size=320 src/index.js",
+    "test": "node tests/backup-test.js && node tests/archive-test.js && node tests/delivery-test.js && node tests/persist-media-test.js && node tests/migration-test.js && node tests/web-delivery-test.js",
+    "test:all": "npm test && node tests/security-integration.js && node tests/operations-integration.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.24",

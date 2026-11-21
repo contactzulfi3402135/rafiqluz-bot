@@ -1,14 +1,14 @@
 {
-  "name": "Raqifluz Channel Bot — Precision Console",
+  "name": "Raqifluz Channel Bot — Signal Desk",
   "short_name": "Raqifluz",
-  "description": "The channel-mirroring console: sources, targets, queue, WhatsApp mirror, analytics and guardrails.",
+  "description": "Raqifluz Signal Desk — the premium WhatsApp channel mirroring console: sources, targets, queue, guardrails, analytics and a live mission-control dashboard.",
   "id": "/",
   "start_url": "/admin",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0b1220",
-  "theme_color": "#0b1220",
+  "background_color": "#0B0F14",
+  "theme_color": "#0B0F14",
   "icons": [
     { "src": "/pwa/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "/pwa/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },

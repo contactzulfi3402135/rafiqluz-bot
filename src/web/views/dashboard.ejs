@@ -7,7 +7,7 @@
 <title><%= botName %> · v<%= version %></title>
 <!-- 5G (R83): PWA — installable, offline shell, quick shortcuts -->
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#0b1220">
+<meta name="theme-color" content="#0B0F14">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -27,7 +27,8 @@ try {
 <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/noto-sans-arabic-arabic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/app.css?v=secure-1">
+<link rel="stylesheet" href="/app.css?v=12.0.0">
+<link rel="stylesheet" href="/premium.css?v=12.0.0">
 </head>
 <body>
 <div class="app" id="app">
@@ -1928,6 +1929,7 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=delivery-1"></script>
+<script src="/app.js?v=12.0.0"></script>
+<script src="/premium.js?v=12.0.0" defer></script>
 </body>
 </html>

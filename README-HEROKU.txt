@@ -1,4 +1,4 @@
-RAQIFLUZ CHANNEL BOT — HEROKU DEPLOYMENT AND RECOVERY (11.5)
+RAQIFLUZ CHANNEL BOT — HEROKU DEPLOYMENT AND RECOVERY (12.0.0 Obsidian)
 
 Heroku is supported and remains the primary deployment path. This application is
 currently a SINGLE workspace on ONE web dyno. WhatsApp channel automation uses

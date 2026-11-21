@@ -65,6 +65,11 @@ function build(app) {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     // Arena's preview is intentionally embedded; regular deployments deny framing.
     if (!/\.e2b\.app(?::\d+)?$/i.test(req.get('host') || '')) res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    // Platform-neutral hardening (additive, v12 Obsidian): no powerful features in
+    // this app, and isolate browsing context from popups it opens itself.
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Origin-Agent-Cluster', '?1');
     if (['GET','HEAD','OPTIONS'].includes(req.method)) return next();
     // Cross-site browser mutations must not use ambient cookie authority.
     if (req.get('sec-fetch-site') === 'cross-site') return res.status(403).json({ok:false,error:'Cross-site request rejected.'});
@@ -341,6 +346,30 @@ function build(app) {
       const labels = buckets.map((b, i) => { const dt = new Date(now - (23 - i) * 3600e3 + 5 * 3600e3); return String(dt.getUTCHours()).padStart(2, '0') + ':00'; });
       res.json({ ok: true, buckets, labels, total: rows.length });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
+  });
+
+  /* v12 Obsidian: build & runtime fingerprint for the About screen and the
+     premium status pill. Read-only, no secrets — safe for any signed-in role. */
+  api.get('/meta', (req, res) => {
+    const mem = process.memoryUsage();
+    res.json({
+      ok: true,
+      name: 'raqifluz-channel-bot',
+      version: cfg.config.version,
+      codename: 'Obsidian',
+      node: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      pid: process.pid,
+      env: process.env.NODE_ENV || 'production',
+      uptimeSec: Math.round(process.uptime()),
+      rssMB: Math.round(mem.rss / 1048576),
+      heapUsedMB: Math.round(mem.heapUsed / 1048576),
+      startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+      now: new Date().toISOString(),
+      timezone: 'Asia/Karachi (UTC+5)',
+      license: 'MIT'
+    });
   });
 
   /* ---- sources / targets / directory ---- */
