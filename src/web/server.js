@@ -297,6 +297,44 @@ function build(app) {
     }
     next();
   });
+  // AI calls and multi-target sends can exceed Heroku's 30-second HTTP window.
+  // Start once, return immediately, then poll. Jobs are process-local: if the
+  // dyno restarts, the client must check history before attempting another send.
+  const aiTasks = new Map();
+  const taskOwner = req => tokenFor(req)?.sessionId || req.sessionID;
+  api.post('/ai/tasks', (req,res) => {
+    const kind=String(req.body?.kind || ''), text=String(req.body?.text || '').trim();
+    const requested=String(req.body?.requestId || '');
+    if (!['chat','preview'].includes(kind) || !text || text.length>(kind==='chat'?2000:10000) || !/^[a-zA-Z0-9_-]{16,80}$/.test(requested)) return res.status(400).json({ok:false,error:'Invalid AI task request.'});
+    const owner=taskOwner(req), now=Date.now(), digest=crypto.createHash('sha256').update(kind+'\0'+text).digest('hex');
+    for (const [id,t] of aiTasks) if (t.state!=='running' && now-t.finishedAt>30*60e3) aiTasks.delete(id);
+    const previous=aiTasks.get(requested);
+    if (previous) {
+      if (previous.owner!==owner || previous.kind!==kind || previous.digest!==digest) return res.status(409).json({ok:false,error:'Task identifier already in use.'});
+      return res.status(202).json({ok:true,id:requested,status:previous.state});
+    }
+    if ([...aiTasks.values()].filter(t=>t.state==='running').length>=8) return res.status(429).json({ok:false,error:'AI is busy; please wait for a task to finish.'});
+    const task={owner,kind,text,digest,state:'running',startedAt:now}; aiTasks.set(requested,task);
+    res.status(202).json({ok:true,id:requested,status:'running'});
+    setImmediate(async () => {
+      try {
+        if (kind==='chat') {
+          const result=await aicontrol.chat(text);
+          AICHAT.add('user',text); AICHAT.add('assistant',result.reply);
+          task.result={reply:result.reply,actions:result.actions || []};
+        } else task.result=await require('../ai-editor').analyze(text,{preview:true});
+        task.state='done';
+      } catch(err) {task.state='failed';task.error=String(err.message || err).slice(0,300);}
+      finally {task.text='';task.finishedAt=Date.now();}
+    });
+  });
+  api.get('/ai/tasks/:id', (req,res) => {
+    const task=aiTasks.get(String(req.params.id || ''));
+    if (!task || task.owner!==taskOwner(req)) return res.status(404).json({ok:false,error:'AI task not found. The server may have restarted; check chat, History and Delivery review before resending.'});
+    res.set('Cache-Control','no-store');
+    res.json({ok:true,status:task.state,...(task.state==='done'?{result:task.result}:{}),...(task.state==='failed'?{error:task.error}:{})});
+  });
+
   /* 5E (R71): session introspection — role + when the idle timeout will drop it */
   api.get('/session', (req, res) => res.json({
     ok: true,

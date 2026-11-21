@@ -81,9 +81,34 @@ async function api(path, opts = {}) {
   if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
   const res = await fetch(path, { ...opts, headers });
   if (res.status === 401) { location.href = '/login'; throw new Error('logged out'); }
-  const data = await res.json().catch(() => ({ ok: false, error: 'Bad response' }));
-  if (!res.ok || data.ok === false) throw new Error(data.error || ('HTTP ' + res.status));
+  let data;
+  try { data = JSON.parse(await res.text()); }
+  catch { throw new Error(`Server returned HTTP ${res.status} without a valid JSON response. The server may be restarting or a gateway timed out; check the app logs. Before repeating a send, check History and Delivery review.`); }
+  if (!res.ok || data.ok === false) { const err = new Error(data.error || ('HTTP ' + res.status)); err.status = res.status; throw err; }
   return data;
+}
+
+// Long AI actions run in the server background so Heroku's request timeout
+// does not cut off a post already being sent. Never retry the POST automatically.
+const aiTaskId = () => 'ai_' + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replace(/-/g,'') : Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+async function waitAiTask(id) {
+  const deadline=Date.now()+12*60*1000; let failures=0;
+  while (Date.now()<deadline) {
+    let status;
+    try { status=await api('/api/ai/tasks/'+encodeURIComponent(id)); failures=0; }
+    catch(e) {
+      if (/not found/i.test(e.message) || ++failures>=3) throw e;
+      await new Promise(resolve=>setTimeout(resolve,2500)); continue;
+    }
+    if (status.status==='done') return status.result;
+    if (status.status==='failed') throw new Error(status.error || 'AI task failed.');
+    await new Promise(resolve=>setTimeout(resolve,2000));
+  }
+  throw new Error('AI is still processing. Check chat, History and Delivery review before trying again.');
+}
+async function startAiTask(kind, text, id=aiTaskId()) {
+  await api('/api/ai/tasks',{method:'POST',body:{kind,text,requestId:id}});
+  return waitAiTask(id);
 }
 
 /* toasts — bottom-right stack, 4 s, optional action (Undo) */
@@ -4266,25 +4291,34 @@ $('#aiControlToggle').addEventListener('change', async (ev) => {
   try { await api('/api/ai/control', { method: 'POST', body: { on: ev.target.checked } }); toast(ev.target.checked ? 'Bot control ON — the AI can act for you' : 'Bot control OFF — the AI answers questions only', 'ok'); }
   catch (e) { ev.target.checked = !ev.target.checked; toast(e.message, 'err'); }
 });
-async function sendAiChat() {
-  const log = $('#robotLog');
-  const inp = $('#robotInput');
-  if (!log || !inp) return;
-  const msg = inp.value.trim();
-  if (!msg) return;
-  inp.value = '';
-  log.insertAdjacentHTML('beforeend', `<div class="bubble user">${esc(msg)}</div>`);
-  log.scrollTop = 999999;
-  try {
-    const r = await api('/api/ai/chat', { method: 'POST', body: { message: msg } });
-    for (const a of (r.actions || [])) {
-      log.insertAdjacentHTML('beforeend', `<div class="bubble tool">tool: ${esc(a.tool)} ${esc(JSON.stringify(a.args || {}))} → ${esc(a.ok ? JSON.stringify(a.result) : 'ERROR: ' + a.error)}</div>`);
-
-    }
-    log.insertAdjacentHTML('beforeend', `<div class="bubble bot">${esc(r.reply)}</div>`);
-  } catch (e) { log.insertAdjacentHTML('beforeend', `<div class="bubble bot">Error: ${esc(e.message)}</div>`); }
-  log.scrollTop = 999999;
+let chatBusy = false;
+function showAiChatResult(r) {
+  const log=$('#robotLog');
+  for (const a of (r.actions || [])) log.insertAdjacentHTML('beforeend', `<div class="bubble tool">tool: ${esc(a.tool)} ${esc(JSON.stringify(a.args || {}))} → ${esc(a.ok ? JSON.stringify(a.result) : 'ERROR: ' + a.error)}</div>`);
+  log.insertAdjacentHTML('beforeend', `<div class="bubble bot">${esc(r.reply)}</div>`); log.scrollTop=999999;
 }
+async function resumeAiChat(id) {
+  if (chatBusy) return; chatBusy=true; $('#robotSend').disabled=true;
+  const log=$('#robotLog');
+  try { const result=await waitAiTask(id); showAiChatResult(result); sessionStorage.removeItem('rc-ai-chat-task'); }
+  catch(e) { log.insertAdjacentHTML('beforeend', `<div class="bubble bot">${esc(e.message)} Check History and Delivery review before retrying a post.</div>`); sessionStorage.removeItem('rc-ai-chat-task'); }
+  finally { chatBusy=false; $('#robotSend').disabled=false; log.scrollTop=999999; }
+}
+async function sendAiChat() {
+  const log=$('#robotLog'), inp=$('#robotInput'); if (!log || !inp || chatBusy) return;
+  const msg=inp.value.trim(); if (!msg) return;
+  inp.value=''; chatBusy=true; $('#robotSend').disabled=true;
+  log.insertAdjacentHTML('beforeend', `<div class="bubble user">${esc(msg)}</div>`);
+  const id=aiTaskId(); try { sessionStorage.setItem('rc-ai-chat-task',id); } catch(e) {}
+  try {
+    // If the initial POST loses its response, only poll its ID; never resubmit.
+    try { await api('/api/ai/tasks',{method:'POST',body:{kind:'chat',text:msg,requestId:id}}); }
+    catch(e) { if (e.status >= 400 && e.status < 500) throw e; }
+    const r=await waitAiTask(id); showAiChatResult(r);
+  } catch(e) { log.insertAdjacentHTML('beforeend', `<div class="bubble bot">Error: ${esc(e.message)} Check History and Delivery review before retrying a post.</div>`); }
+  finally { try { sessionStorage.removeItem('rc-ai-chat-task'); } catch(e) {} chatBusy=false; $('#robotSend').disabled=false; log.scrollTop=999999; }
+}
+try { const previousTask=sessionStorage.getItem('rc-ai-chat-task'); if(previousTask) resumeAiChat(previousTask); } catch(e) {}
 $('#robotSend').addEventListener('click', sendAiChat);
 $('#robotInput').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); sendAiChat(); } });
 $('#aiChatClear').addEventListener('click', async () => {
@@ -5593,8 +5627,8 @@ $('#editorTest').addEventListener('click', async () => {
   if (editorDirty) return toast('Save the settings before testing.', 'err');
   button.disabled = true; output.textContent = 'Analyzing with saved settings…';
   try {
-    const r = await api('/api/ai/editor/preview',{method:'POST',body:{text:$('#editorSample').value}});
-    output.textContent = `${r.decision.toUpperCase()} — ${r.reason || ''}\n\n${r.text || ''}${r.footer ? '\n\n'+r.footer : ''}\n\nPreview only — nothing was sent or queued.`;
+    const r = await startAiTask('preview',$('#editorSample').value);
+    output.textContent = `${r.decision.toUpperCase()} — ${r.reason || ''}\n\n${r.text || ''}${r.footer ? '\n\n'+r.footer : ''}${r.historyWarning ? '\n\n'+r.historyWarning : ''}\n\nPreview only — nothing was sent or queued.`;
   } catch(e) { output.textContent = e.message; }
   finally { button.disabled = false; }
 });

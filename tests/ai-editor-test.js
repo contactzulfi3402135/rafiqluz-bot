@@ -30,7 +30,23 @@ const rawCallFor=ai.callFor;
  ok(r.decision==='skip' && seen.includes('Skip same-day duplicate stories') && seen.includes('semanticDuplicateShortcut'), 'natural-language instruction gets same-day history with shortcut off');
  editor.save({semantic:true,instruction:'Keep facts'});
  ai.callFor=async()=>JSON.stringify({duplicate_id:todayId,confidence:.5});r=await editor.analyze('Possibly same story',{now:new Date('2026-09-15T19:30:00Z')});ok(r.decision==='review','uncertain duplicate requires review');
+ // Real-world migration cases: empty bodies, very long bodies, and >200 posts
+ // must not force every new post into review. Available history is still checked.
  d.prepare('DELETE FROM post_keys').run();d.prepare('DELETE FROM posts').run();
+ for (let i=0;i<225;i++) {
+   P.mark('legacy@newsletter','legacy-'+i,'published','',i===224 ? 'Long announcement '+ 'x'.repeat(7000) : i%12===0 ? '' : 'Past announcement '+i);
+   const pid=P.postId('legacy@newsletter','legacy-'+i);d.prepare('UPDATE posts SET created_at=? WHERE id=?').run('2026-09-15 19:10:00',pid);
+ }
+ let compared=0, largest=0, matchCalls=0;
+ ai.callFor=async(feature,prompt)=>{
+   if(feature==='match'){const data=JSON.parse(prompt.split('DATA: ').pop());compared+=data.published.length;matchCalls++;largest=Math.max(largest,...data.published.map(x=>x.text.length));return JSON.stringify({duplicate_id:null,confidence:1});}
+   return JSON.stringify({decision:'publish',reason:'new story',text:'New legitimate post',promotion:''});
+ };
+ r=await editor.analyze('Fresh original content',{now:new Date('2026-09-15T19:30:00Z')});
+ ok(r.decision==='publish' && compared===100 && matchCalls===10 && largest<=2000,'missing, long and over-200 history does not block publishing; comparison is bounded');
+ ok(/no saved text/.test(r.historyWarning) && /comparison limit/.test(r.historyWarning) && /excerpts/.test(r.historyWarning),'incomplete duplicate history is explicitly reported');
+ d.prepare('DELETE FROM post_keys').run();d.prepare('DELETE FROM posts').run();
+
  ai.callFor=async()=>JSON.stringify({decision:'publish',reason:'legitimate',text:'Apply at https://official.edu.pk/apply',promotion:'Follow for more updates'});
  r=await editor.analyze('Admissions https://official.edu.pk/apply');ok(r.decision==='publish'&&r.footer.includes('+923001234567')&&r.text.includes('official.edu.pk'),'official link survives and exact owner footer is included');
  ai.callFor=async()=>JSON.stringify({decision:'publish',reason:'ok',text:'Apply now',promotion:''});r=await editor.analyze('Apply https://official.edu.pk/apply');ok(r.decision==='review','removing configured official link requires review');
@@ -79,6 +95,11 @@ const rawCallFor=ai.callFor;
  ok(sent.length===3 && sent[2].content.text==='Unchanged original post','editor disabled preserves normal source publishing');
  S.set('ai.key.openrouter','test-only');S.set('privacy.ai.content','1');require('../src/aicontrol').setControl(true);
  let round=0;ai.callFor=async(feature)=>{ if(feature!=='assistant') throw Error('unexpected AI'); round++;return JSON.stringify({tool:'post_text',args:{text:'Assistant post'}}); };
+ let badEcho; // mock deliberately parrots the request
+ ai.callFor=async()=>JSON.stringify({tool:'post_text',args:{text:'make post'}});
+ const countBeforeEcho=sent.length;badEcho=await require('../src/aicontrol').chat('make post');
+ ok(sent.length===countBeforeEcho && /post topic/.test(badEcho.reply),'generic request is not posted verbatim as content');
+ ai.callFor=async(feature)=>{ if(feature!=='assistant') throw Error('unexpected AI'); round++;return JSON.stringify({tool:'post_text',args:{text:'Assistant post'}}); };round=0;
  const before=d.prepare('SELECT COUNT(*) n FROM approvals').get().n;let chat=await require('../src/aicontrol').chat('Publish a post');
  ok(!chat.actions[0].result.queued && chat.actions[0].result.published && sent.length===4,'assistant publishes directly when queue is off');
  ok(round===1 && d.prepare('SELECT COUNT(*) n FROM approvals').get().n===before && /provider accepted/i.test(chat.reply),'one direct send, no queue or second model tool call');
@@ -96,10 +117,12 @@ const rawCallFor=ai.callFor;
  const beforeFailure=d.prepare('SELECT COUNT(*) n FROM approvals').get().n;chat=await require('../src/aicontrol').chat('Publish');
  ok(!chat.actions[0].result.published && !chat.actions[0].result.queued && /nothing was sent or queued/i.test(chat.reply) && d.prepare('SELECT COUNT(*) n FROM approvals').get().n===beforeFailure,'editor failure does not silently queue or send assistant post');
  editor.save({enabled:true,semantic:false,instruction:'Make it concise and include my channel link',footerMode:'adaptive'});
+ P.mark('old-channel@newsletter','old-empty','published','','');
  wa.sendToChannel=async(_sock,jid,content)=>{sent.push({jid,content});return 'successful-'+sent.length};
  ai.callFor=async(feature)=>feature==='assistant' ? JSON.stringify({tool:'post_text',args:{text:'New job post',target:'Target'}}) : feature==='match' ? JSON.stringify({duplicate_id:null,confidence:1}) : JSON.stringify({decision:'publish',reason:'styled',text:'A concise job post\nJoin: https://example.org/channel'});
  chat=await require('../src/aicontrol').chat('Publish a job post to Target');
  ok(chat.actions[0].result.published && !chat.actions[0].result.queued && sent.at(-1).content.text.includes('https://example.org/channel'),'queue-off assistant directly publishes AI-edited text with adaptive footer');
+ ok(/no saved text/.test(chat.reply),'assistant reports incomplete saved history without blocking the post');
  let calls=0;const ownerChat=require('../src/aicontrol');
  ai.callFor=async()=>{calls++;return JSON.stringify({tool:'set_editor_policy',args:{instruction:'Use concise Urdu and a friendly closing.',mode:'append'}})};
  const previous=editor.settings().instruction;chat=await ownerChat.chat('From now on use concise Urdu and a friendly closing.');

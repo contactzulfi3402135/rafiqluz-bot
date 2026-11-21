@@ -968,7 +968,7 @@ try {
             <div class="field"><label for="editorFooter">Your details for AI to use</label><textarea class="in" id="editorFooter" rows="3" maxlength="1200" placeholder="Your channel number, bot number, channel link, or other details"></textarea><span class="muted tiny">Provide only details you want used. Tell AI in your instructions when and how to use them; it can adapt the footer to each post.</span></div>
             <div class="field"><label for="editorFooterMode">Footer behavior</label><select class="in" id="editorFooterMode"><option value="adaptive">AI decides from my instructions (adaptive)</option><option value="fixed">Append my details exactly (fixed)</option></select><span class="muted tiny">Existing saved footers retain fixed mode until you choose adaptive.</span></div>
             <div class="field"><label for="editorTimezone">Calendar-day time zone</label><input class="in" id="editorTimezone" maxlength="80" placeholder="Asia/Karachi"></div>
-            <p class="muted tiny">If AI is unavailable, uncertain, or cannot analyze media-only posts, the item is held for human review in Queue even when ordinary queue automation is off. Same-day checks are best-effort and compare saved text; multiple bot processes or already-pending posts can still create duplicates. Source filters, AI Pilot, routing and safety checks remain active. While AI post instructions are enabled, the AI controls formatting instead of the older template, translation, header and signature tools.</p>
+            <p class="muted tiny">If AI is unavailable, uncertain, or cannot analyze media-only posts, the item is held for human review in Queue even when ordinary queue automation is off. Same-day checks compare up to the 100 most recent saved text posts; older or missing text and long-post excerpts can reduce detection; multiple bot processes or already-pending posts can still create duplicates. Source filters, AI Pilot, routing and safety checks remain active. While AI post instructions are enabled, the AI controls formatting instead of the older template, translation, header and signature tools.</p>
             <button type="button" class="btn btn-p" id="editorSave">Save AI post settings</button>
             <div class="field" style="margin-top:18px"><label for="editorSample">Test saved settings without sending</label><textarea class="in" id="editorSample" rows="3" placeholder="Paste a sample source post"></textarea><button type="button" class="btn" id="editorTest">Analyze sample</button><pre id="editorTestResult" class="editor-result" aria-live="polite"></pre></div>
           </div>
@@ -1983,6 +1983,6 @@ try {
     <button class="btn btn-p" id="robotSend" title="Send" aria-label="Send"><%- icon('send','icon icon-xs') %></button>
   </div>
 </div>
-<script src="/app.js?v=editor-2"></script>
+<script src="/app.js?v=editor-3"></script>
 </body>
 </html>

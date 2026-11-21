@@ -634,6 +634,7 @@ async function processOne(m, src, jid, id) {
     let editorial = null;
     if (editorConfig.enabled) {
       editorial = await editor.analyze(parts.text);
+      if (editorial.historyWarning) ring.warn('post.editor.history', editorial.historyWarning);
       if (editorial.decision === 'skip') {
         P.mark(jid, id, 'skipped', editorial.reason || 'AI editorial skip', parts.text);
         ring.info('post.skip.editor', `AI editor skipped a source post: ${String(editorial.reason || 'filtered').slice(0,150)}`);
