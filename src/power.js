@@ -29,23 +29,30 @@ function wallParts(iso, tz) {
     return { y: +p.year, mo: +p.month, d: +p.day, hm: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` };
   } catch { return null; }
 }
-/** 'YYYY-MM-DDTHH:MM' wall-clock in tz → UTC ISO (two-pass offset fix). */
+/** Wall-clock → UTC. Reject invalid dates, zones and DST gaps; when clocks
+ * repeat, select the earlier occurrence deterministically. */
 function localToUtc(localStr, tz = DEFAULT_TZ) {
-  const [d, t] = String(localStr).split('T');
-  const [y, mo, da] = d.split('-').map(Number);
-  const [h, mi] = (t || '00:00').split(':').map(Number);
-  if (!y || !mo || !da) throw new Error('Invalid time.');
-  const base = Date.UTC(y, mo - 1, da, h || 0, mi || 0);
-  const off1 = tzOffset(base, tz);
-  const off2 = tzOffset(base - off1, tz);
-  return new Date(base - off2).toISOString();
+  const m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(localStr));
+  if(!m) throw new Error('Enter a valid local date and time.');
+  const [y,mo,da,h,mi]=m.slice(1).map(Number);
+  const base=Date.UTC(y,mo-1,da,h,mi); const check=new Date(base);
+  if(y<1970 || y>9999 || check.getUTCFullYear()!==y || check.getUTCMonth()+1!==mo || check.getUTCDate()!==da || h>23 || mi>59) throw new Error('Enter a valid local date and time.');
+  try {new Intl.DateTimeFormat('en-GB',{timeZone:tz}).format(check);} catch {throw new Error('Invalid time zone.');}
+  const offsets=new Set();for(let delta=-36;delta<=36;delta+=6)offsets.add(tzOffset(base+delta*3600e3,tz));
+  const candidates=[...offsets].map(off=>base-off).filter(ts=>{const p=wallParts(new Date(ts).toISOString(),tz);return p && p.y===y && p.mo===mo && p.d===da && p.hm===`${m[4]}:${m[5]}`;}).sort((x,z)=>x-z);
+  if(!candidates.length)throw new Error('That local time does not exist because the clock changes. Choose another time.');
+  return new Date(candidates[0]).toISOString();
 }
 
 function addJob({ jid, name, text, at, repeat = 'once', weekdays = '', intervalMin = 0, tz = DEFAULT_TZ, templateId = '', localAt = '' }) {
   if (!jid || !String(text || '').trim()) throw new Error('Target and text are required.');
+  if (String(text).length>4096) throw new Error('Scheduled text must be 4,096 characters or less.');
   let atIso = String(at || '');
   if (localAt && !/Z$/.test(atIso)) atIso = localToUtc(localAt, tz || DEFAULT_TZ);
   if (!atIso) throw new Error('Target, text and time are required.');
+  if (!/(?:Z|[+-]\d{2}:\d{2})$/i.test(atIso) || !Number.isFinite(Date.parse(atIso))) throw new Error('Enter a valid time with a timezone.');
+  atIso=new Date(atIso).toISOString();
+  try {new Intl.DateTimeFormat('en-GB',{timeZone:tz||DEFAULT_TZ}).format(new Date());} catch {throw new Error('Invalid time zone.');}
   const rep = ['once', 'daily', 'weekly', 'weekdays', 'interval'].includes(repeat) ? repeat : 'once';
   const job = {
     id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
@@ -56,7 +63,7 @@ function addJob({ jid, name, text, at, repeat = 'once', weekdays = '', intervalM
     tz: String(tz || DEFAULT_TZ).slice(0, 40), templateId: String(templateId || '').slice(0, 120),
     enabled: true, sent: 0, lastRun: null
   };
-  const list = jobs(); list.push(job); saveJobs(list);
+  const list = jobs(); if(list.length>=200)throw new Error('The schedule limit of 200 has been reached; remove an old schedule first.'); list.push(job); saveJobs(list);
   return job;
 }
 function removeJob(id) { saveJobs(jobs().filter((j) => j.id !== id)); }
@@ -66,7 +73,7 @@ function setJobEnabled(id, v) { const l = jobs(); const j = l.find((x) => x.id =
 function advance(job) {
   const t = new Date(job.at);
   if (job.repeat === 'once') return null;
-  if (job.repeat === 'interval') { const step = Math.max(60e3, (job.intervalMin || 30) * 60e3); while (t.getTime() <= Date.now()) t.setTime(t.getTime() + step); return t.toISOString(); }
+  if (job.repeat === 'interval') { const step = Math.max(60e3, (job.intervalMin || 30) * 60e3); const start=t.getTime();if(!Number.isFinite(start))return null; const count=Math.max(1,Math.floor((Date.now()-start)/step)+1);return new Date(start+count*step).toISOString(); }
   if (['daily','weekly','weekdays'].includes(job.repeat)) {
     const tz = job.tz || DEFAULT_TZ;
     const original = wallParts(job.at,tz), today = wallParts(new Date(Date.now()).toISOString(),tz);
@@ -76,7 +83,7 @@ function advance(job) {
     const weekdays = String(job.weekdays || '1,2,3,4,5').split(',').map(Number).filter(w=>w>=1&&w<=7);
     if (job.repeat === 'weekdays' && !weekdays.length) return null;
     // Search from today in local calendar days, preserving the original wall time.
-    for (let i=0;i<=8;i++) {
+    for (let i=0;i<=16;i++) {
       const day = todayDay + i*86400e3, date = new Date(day);
       const offset = Math.round((day-originalDay)/86400e3);
       if (offset < 0) continue;
@@ -84,7 +91,7 @@ function advance(job) {
       const wd=(date.getUTCDay()+6)%7+1;
       if (job.repeat === 'weekdays' && !weekdays.includes(wd)) continue;
       const local=`${date.getUTCFullYear()}-${String(date.getUTCMonth()+1).padStart(2,'0')}-${String(date.getUTCDate()).padStart(2,'0')}T${original.hm}`;
-      const candidate=localToUtc(local,tz);
+      let candidate;try{candidate=localToUtc(local,tz);}catch{continue;}
       if (Date.parse(candidate)>Date.now() && Date.parse(candidate)>Date.parse(job.at)) return candidate;
     }
     return null;
@@ -100,6 +107,15 @@ function calendar(monthStr) {
   const mm = mo || now.getMonth() + 1;
   const dim = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
   const days = {};
+  const boundsCache=new Map();
+  const dayBoundary=(day,tz)=>{
+    const cacheKey=day+'|'+tz;if(boundsCache.has(cacheKey))return boundsCache.get(cacheKey);
+    let value=null;
+    // Midnight can be skipped by a timezone transition. Find the first valid
+    // minute of the same day; a wholly skipped civil date has no boundary.
+    for(let minute=0;minute<1440;minute++){const date=new Date(day+minute*60000);const local=date.toISOString().slice(0,16);try{value=Date.parse(localToUtc(local,tz));break}catch(e){if(!/does not exist/.test(e.message))break;}}
+    boundsCache.set(cacheKey,value);return value;
+  };
   for (let d = 1; d <= dim; d++) {
     const key = `${yy}-${String(mm).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const dayStart = Date.UTC(yy, mm - 1, d);
@@ -111,20 +127,24 @@ function calendar(monthStr) {
       if (!Number.isFinite(start)) continue;
       let runs = false;
       const dayIsoWd = (new Date(dayStart).getUTCDay() + 6) % 7 + 1; // weekday of this calendar day (tz-independent)
-      if (job.repeat === 'once') runs = start >= dayStart && start <= dayEnd;
-      else if (job.repeat === 'daily') runs = true;
+      const localStart=wallParts(job.at,job.tz || DEFAULT_TZ);
+      const startDay=localStart ? Date.UTC(localStart.y,localStart.mo-1,localStart.d) : Infinity;
+      if (job.repeat === 'once') runs = startDay === dayStart;
+      else if (job.repeat === 'daily') runs = startDay <= dayStart;
       else if (job.repeat === 'weekly') {
         const ap = wallParts(job.at, job.tz || DEFAULT_TZ);
-        runs = Boolean(ap) && (new Date(Date.UTC(ap.y, ap.mo - 1, ap.d)).getUTCDay() + 6) % 7 + 1 === dayIsoWd && start <= dayEnd;
+        runs = Boolean(ap) && (new Date(Date.UTC(ap.y, ap.mo - 1, ap.d)).getUTCDay() + 6) % 7 + 1 === dayIsoWd && startDay <= dayStart;
       }
       else if (job.repeat === 'weekdays') {
         const wdays = String(job.weekdays || '1,2,3,4,5').split(',').map((w) => parseInt(w, 10)).filter((w) => w >= 1 && w <= 7);
-        runs = start <= dayEnd && wdays.includes(dayIsoWd);
+        runs = startDay <= dayStart && wdays.includes(dayIsoWd);
       } else if (job.repeat === 'interval') {
-        const step = Math.max(60e3, (job.intervalMin || 30) * 60e3);
-        let t = start;
-        if (t < dayStart) t += Math.ceil((dayStart - t) / step) * step;
-        runs = t <= dayEnd;
+        const step = Math.max(60e3, (job.intervalMin || 30) * 60e3),tz=job.tz||DEFAULT_TZ;
+        const low=dayBoundary(dayStart,tz); let high=dayBoundary(dayStart+86400e3,tz);
+        // If the next civil date is skipped, the following boundary still ends
+        // the current date (rare historical timezone changes).
+        if(high===null)high=dayBoundary(dayStart+2*86400e3,tz);
+        if(low!==null && high!==null && high>low){let t=start;if(t<low)t+=Math.ceil((low-t)/step)*step;runs=t<high;}
       }
       if (runs) list.push({ id: job.id, name: job.name, time: wallParts(job.at, job.tz || DEFAULT_TZ)?.hm || '', repeat: job.repeat });
     }
@@ -140,7 +160,10 @@ async function tick() {
   try {
     for (const job of jobs()) {
       try {
+        if (require('./lifecycle').isStopping() || require('./panic').active()) break;
         if (!job.enabled || !Number.isFinite(Date.parse(job.at)) || Date.parse(job.at) > Date.now()) continue;
+        const latest=jobs().find(x=>x.id===job.id);
+        if(!latest || !latest.enabled || latest.at!==job.at || latest.jid!==job.jid || latest.text!==job.text || latest.templateId!==job.templateId)continue;
         let text = job.text;
         if (job.templateId) { try { text = String(require('./templates').apply(job.text, {}).text || job.text); } catch {} }
         const runId = `${job.id}:${job.at}`;

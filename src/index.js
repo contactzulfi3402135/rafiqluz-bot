@@ -9,7 +9,16 @@ const fs = require('fs');
 const express = require('express');
 
 const cfg = require('./config');
+// Refuse the known mixed-source snapshot before creating or touching state.
+try { require('./web-baseline-guard').assertCompatible(cfg.config.root); }
+catch (e) { console.error('Startup stopped: '+e.message); process.exit(1); }
 cfg.ensureDirs();
+// Acquire before cloud restore, database migrations, workers or WhatsApp.
+// This is a cooperative local guard; separate hosts/volumes still need an
+// external single-instance guarantee.
+let instanceLock;
+try { instanceLock=require('./instance-lock').acquire(cfg.config.paths); }
+catch(e) { console.error('Startup stopped: '+e.message); process.exit(1); }
 
 const { ring, logger } = require('./logger');
 
@@ -25,6 +34,7 @@ async function shutdown(signal) {
   // Best effort only: the dyno can be killed or the remote snapshot can fail.
   try { await require('./persist').flush('deploy-shutdown', 12000); } catch { }
   try { require('./db').open().close(); } catch { }
+  try { instanceLock.release(); } catch { }
   process.exit(0);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM (Heroku deploy/restart)'));
@@ -47,7 +57,7 @@ process.on('unhandledRejection', (err) => { ring.error('bot.crash', `Unhandled r
      watchdog turns any stall into a LOUD exit(1) with the stall point named.) */
   {
     const pc = cfg.config.persist;
-    ring.info('boot.env', `Boot env: cloud-memory=${pc.repo && pc.token ? 'ON' : 'OFF'}${pc.repo ? ` repo=${pc.repo}@${pc.branch || 'bot-state'}` : ''} token=${pc.token ? `set (…${String(pc.token).slice(-4)})` : 'MISSING'} port=${cfg.config.dashboard.port} publicUrl=${cfg.config.dashboard.publicUrl || 'n/a'}`);
+    ring.info('boot.env', `Boot env: cloud-memory=${pc.repo && pc.token ? 'ON' : 'OFF'}${pc.repo ? ` repo=${pc.repo}@${pc.branch || 'bot-state'}` : ''} token=${pc.token ? 'set' : 'MISSING'} port=${cfg.config.dashboard.port} publicUrl=${cfg.config.dashboard.publicUrl || 'n/a'}`);
   }
   const bootWatch = setTimeout(() => {
     ring.error('bot.crash', 'Boot watchdog: boot did not finish in 30 s — the last boot.* line above is where it stalled (looking for: web.up, then bot.ready)');
@@ -100,9 +110,11 @@ process.on('unhandledRejection', (err) => { ring.error('bot.crash', `Unhandled r
 
   // 7. web server
   const app = express();
+  app.get('/readyz', require('./readiness').handler({lifecycle:require('./lifecycle'),open:require('./db').open}));
   require('./web/server').build(app);
-  const server = app.listen(cfg.config.dashboard.port, '0.0.0.0', () => {
-    ring.info('web.up', `Dashboard live on port ${cfg.config.dashboard.port} — /login → /admin`);
+  const server = app.listen(cfg.config.dashboard.port, cfg.config.dashboard.host, () => {
+    const bound = server.address();
+    ring.info('web.up', `Dashboard live on port ${typeof bound === 'object' ? bound.port : cfg.config.dashboard.port} (bind ${cfg.config.dashboard.host}) — /login → /admin`);
   });
   /* v7.7.1: a bind failure used to be SILENT — the unhandled 'error' event killed
      the listener, every boot timer is .unref()ed, the event loop drained and Node
@@ -115,6 +127,7 @@ process.on('unhandledRejection', (err) => { ring.error('bot.crash', `Unhandled r
 
   // 8. background services
   require('./power').start();       // scheduler engine (switch OFF by default)
+  require('./telegram-schedules').start(); // explicitly created one-time Telegram schedules
   require('./queue5a').start();     // 5A: approval/hold queue pump (R37/R43)
   require('./housekeep').start();   // v9.0.0 (repo-slim): media/uptime janitor (keeps the cloud snapshot flat)
   require('./keepalive').start();   // self-ping (PUBLIC_URL-aware) + night pause
@@ -141,6 +154,7 @@ process.on('unhandledRejection', (err) => { ring.error('bot.crash', `Unhandled r
     }
   }, 5 * 60e3).unref?.();
 
+  require('./lifecycle').markReady();
   ring.info('bot.ready', 'Boot complete — follow → clean → publish is armed');
   clearTimeout(bootWatch); // boot finished — disarm the stall watchdog (it only fires if this line is never reached)
 

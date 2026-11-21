@@ -81,9 +81,10 @@ function build(app) {
   // R19: vendored Lucide icons inlined server-side at render time (no icon CDN)
   app.use((req, res, next) => { res.locals.icon = require('./icons').icon; next(); });
   /* v7.3.6: profile-photo cache for the WhatsApp tab (served under /media/avatars) */
-  const AVA_DIR = path.join(__dirname, '..', '..', 'data', 'avatars');
+  const AVA_DIR = path.join(path.dirname(cfg.config.paths.database), 'avatars');
   fs.mkdirSync(AVA_DIR, { recursive: true });
-  app.use(express.json({ limit: '2mb' }));
+  const defaultJson=express.json({limit:'2mb'});
+  app.use((req,res,next)=>req.path === '/api/compose' ? next() : defaultJson(req,res,next));
   app.use(express.urlencoded({ extended: false, limit: '64kb' }));
   /* 5E (R71): configurable idle session timeout (minutes, default 120) —
      rolling, so active owners are never logged out mid-work. */
@@ -91,8 +92,19 @@ function build(app) {
   const configuredSecret = cfg.config.dashboard.sessionSecret;
   const sessionSecret = configuredSecret && !/^(change-me|replace-this)/i.test(configuredSecret) ? configuredSecret : crypto.randomBytes(32).toString('hex');
   if (sessionSecret !== configuredSecret) ring.warn('dashboard.secret', 'SESSION_SECRET is missing or default; using a temporary random secret. Set a long random SESSION_SECRET to keep sessions across restarts.');
+  const sessionStoreMode = process.env.DASHBOARD_SESSION_STORE || 'memory';
+  if (!['memory','sqlite'].includes(sessionStoreMode)) throw new Error('DASHBOARD_SESSION_STORE must be memory or sqlite');
+  let durableSessionStore;
+  if (sessionStoreMode === 'sqlite') {
+    if (sessionSecret !== configuredSecret || Buffer.byteLength(sessionSecret) < 32) throw new Error('SQLite dashboard sessions require a persistent SESSION_SECRET of at least 32 bytes.');
+    durableSessionStore = new (require('../sqlite-session-store').SQLiteSessionStore)(require('../db').open());
+    const pruneSessions = () => durableSessionStore.pruneExpired(err => { if (err) ring.warn('dashboard.sessions', 'Could not prune expired dashboard sessions; check storage.'); });
+    pruneSessions();
+    const sessionPruneTimer = setInterval(pruneSessions, 60 * 60e3);
+    sessionPruneTimer.unref?.();
+  }
   app.use(session({
-    secret: sessionSecret, resave: false, saveUninitialized: false, rolling: true,
+    secret: sessionSecret, store: durableSessionStore, resave: false, saveUninitialized: false, rolling: true,
     cookie: { maxAge: 120 * 60e3, sameSite: 'lax', httpOnly: true, secure: 'auto' }
   }));
   /* the timeout is re-read on every request, so the Security card's changes apply live */
@@ -116,13 +128,14 @@ function build(app) {
     return !x || x === j || /^\d+$/.test(x) || /^\d+(@[a-z.]+)?$/i.test(x);
   };
   const maskedName = (jid) => 'Channel •' + String(jid).split('@')[0].slice(-4);
+  const nameLookup = (sources, directory, targets=[]) => {
+    const sm=new Map(sources.map(r=>[r.jid,r.name])),tm=new Map(targets.map(r=>[r.jid,r.name])),dm=new Map(directory.map(r=>[r.jid,r.name]));
+    return jid=>{for(const n of [sm.get(jid),tm.get(jid),dm.get(jid)])if(!badName(n,jid))return n;try{const n=CT.nameOf('main',jid);if(!badName(n,jid))return n}catch{}return maskedName(jid)};
+  };
   const displayName = (jid) => {
-    const sname = CH.listSources().find((x) => x.jid === jid)?.name;
-    if (!badName(sname, jid)) return sname;
-    const dname = CH.dirList().find((x) => x.jid === jid)?.name;
-    if (!badName(dname, jid)) return dname;
-    try { const ct = CT.nameOf('main', jid); if (!badName(ct, jid)) return ct; } catch { }
-    return maskedName(jid);
+    const d=require('../db').open();
+    for(const table of ['sources','targets','directory']) {const n=d.prepare(`SELECT name FROM ${table} WHERE jid=?`).get(jid)?.name;if(!badName(n,jid))return n;}
+    try{const n=CT.nameOf('main',jid);if(!badName(n,jid))return n}catch{}return maskedName(jid);
   };
   const nameOrJid = displayName; /* legacy alias — existing call sites keep working */
   /* v1.2: fire-and-forget name recovery — if a list still carries numeric
@@ -252,7 +265,10 @@ function build(app) {
     const h = String(req.get('authorization') || '');
     for (const client of sseClients) if (client.authSessionId === req.sessionID || (h.startsWith('Bearer ') && client.authToken === h.slice(7))) client.end();
     if (h.startsWith('Bearer ')) tokens.delete(h.slice(7));
-    req.session.destroy(() => { res.clearCookie('connect.sid'); res.redirect('/login'); });
+    req.session.destroy(err => {
+      if (err) return res.status(503).json({ok:false,error:'Could not revoke the dashboard session. Check storage and retry logout.'});
+      res.clearCookie('connect.sid'); res.redirect('/login');
+    });
   });
 
   /* ---- v7.6.0 (R24): SSE live updates — the dashboard reacts the moment something happens ---- */
@@ -351,13 +367,11 @@ function build(app) {
       if (kind === 'sources') maybeResolveNames('sources list');
       /* v7.3.3: a channel must never show as a raw number — displayName()
          resolves sources → directory → contacts → masked "Channel •last4". */
-      res.json({
-        ok: true,
-        list: (kind === 'sources' ? CH.listSources() : CH.listTargets()).map((c) => ({ ...c, name: displayName(c.jid), role: CH.dirRole(c.jid) })),
-        /* v7.9: channels this account follows on WhatsApp that are not Sources
-           yet — the Sources tab offers a one-click "add all" for exactly these. */
-        ...(kind === 'sources' ? { followedMissing: CH.dirList().filter((d) => d.role && !CH.listSources().some((s) => s.jid === d.jid) && !CH.listTargets().some((t) => t.jid === d.jid)).map((d) => ({ jid: d.jid, name: displayName(d.jid) })) } : {})
-      });
+      const sources=CH.listSources(), targets=CH.listTargets(), directory=CH.dirList();
+      const nameFor=nameLookup(sources,directory,targets), roles=new Map(directory.map(d=>[d.jid,d.role||'']));
+      const sourceIds=new Set(sources.map(x=>x.jid)), targetIds=new Set(targets.map(x=>x.jid));
+      res.json({ok:true,list:(kind==='sources'?sources:targets).map(c=>({...c,name:nameFor(c.jid),role:roles.get(c.jid)||''})),
+        ...(kind==='sources'?{followedMissing:directory.filter(d=>d.role&&!sourceIds.has(d.jid)&&!targetIds.has(d.jid)).map(d=>({jid:d.jid,name:nameFor(d.jid)}))}:{})});
     });
     if (kind === 'sources') {
       api.post('/sources/sync-followed', (req, res) => {
@@ -409,7 +423,8 @@ function build(app) {
   }
   api.get('/directory', (req, res) => {
     maybeResolveNames('directory');
-    res.json({ ok: true, list: CH.dirList().map((d) => ({ ...d, name: displayName(d.jid) })), wa: statusFor(req), scan: channels.scanStatus() });
+    const directory=CH.dirList(), nameFor=nameLookup(CH.listSources(),directory,CH.listTargets());
+    res.json({ok:true,list:directory.map(d=>({...d,name:nameFor(d.jid)})),wa:statusFor(req),scan:channels.scanStatus()});
   });
   /* v1.2: owner-triggered name recovery — "my channels show numbers, fix it" */
   api.post('/channels/resolve-names', async (req, res) => {
@@ -525,11 +540,11 @@ function build(app) {
     signatureText: S.get('power.signature.text', ''),
     headerText: S.get('power.header.text', ''),
     template: { ...templates.getInfo(), list: templates.list(), preview: templates.preview(), pool: templates.getPool(), styles: templates.getStyles(), history: templates.getHistory(), zones: templates.customZones() },
-    automonitor: channels.autoMonitorFlag()
+    automonitor: channels.autoMonitorFlag(), autoTarget: channels.autoTargetFlag()
   }));
   api.post('/power/toggle', (req, res) => {
     try {
-      pipeline.setSwitch(String(req.body?.key || ''), Boolean(req.body?.on));
+      pipeline.setSwitch(String(req.body?.key || ''), req.body?.on);
       ring.info('power.toggle', `⚡ ${req.body?.key} turned ${req.body?.on ? 'ON' : 'OFF'} from the dashboard`);
       AUD.log('owner', 'power.toggle', `Switch "${String(req.body?.key).slice(0, 40)}" turned ${req.body?.on ? 'ON' : 'OFF'}`);
       res.json({ ok: true, switches: pipeline.switches() });
@@ -630,11 +645,12 @@ function build(app) {
   api.post('/posts/delete', async (req, res) => {
     if (!pipeline.switches().editposts) return res.status(403).json({ ok: false, error: 'Turn ON the ✍️ Edit Posts switch in Channel Power first.' });
     try {
-      const items = (req.body?.items || []).slice(0, 300).map((i) => ({ target: String(i.target || ''), msgId: String(i.msgId || '') })).filter((i) => i.target && i.msgId);
+      if(!Array.isArray(req.body?.items)||req.body.items.length>300)return res.status(400).json({ok:false,error:'Select at most 300 recorded copies; no deletion was started.'});
+      const items = req.body.items.map((i) => ({ target: String(i?.target || ''), msgId: String(i?.msgId || '') })).filter((i) => i.target && i.msgId);
       if (!items.length) return res.status(400).json({ ok: false, error: 'No posts selected.' });
       const r = await publishMod.deletePublished(items);
-      AUD.log('owner', 'posts.delete', `Deleted ${r.done} published post copy(ies) on channels (${r.errors.length} failed)`);
-      res.json({ ok: true, ...r, note: r.errors.length ? `${r.done} deleted, ${r.errors.length} failed.` : `${r.done} deleted.` });
+      AUD.log('owner', 'posts.delete', `${r.done} deletion request(s) accepted (${r.errors.length} not confirmed); check channels`);
+      res.json({ ok: true, ...r, note: `${r.done} deletion request(s) accepted; ${r.errors.length} not confirmed. Check the channel to verify.` });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
   api.post('/posts/purge', async (req, res) => {
@@ -642,11 +658,11 @@ function build(app) {
     try {
       const { jid, from, to } = req.body || {};
       if (!String(jid || '').endsWith('@newsletter')) return res.status(400).json({ ok: false, error: 'A channel is required.' });
-      const fromTs = Math.floor(Date.parse(`${from}T00:00:00+05:00`) / 1000);
-      const toTs = Math.floor(Date.parse(`${to}T23:59:59+05:00`) / 1000);
-      if (!Number.isFinite(fromTs) || !Number.isFinite(toTs)) return res.status(400).json({ ok: false, error: 'Dates like 2026-10-08 are required.' });
+      const fromTs = Math.floor(Date.parse(power.localToUtc(`${from}T00:00`, 'Asia/Karachi')) / 1000);
+      const toTs = Math.floor(Date.parse(power.localToUtc(`${to}T23:59`, 'Asia/Karachi')) / 1000)+59;
+      if (!Number.isFinite(fromTs) || !Number.isFinite(toTs) || toTs<fromTs) return res.status(400).json({ ok: false, error: 'Choose a valid date range; the end cannot precede the start.' });
       const r = await publishMod.purgeByDate(jid, { ts: fromTs, iso: new Date(fromTs * 1000).toISOString().slice(0, 19).replace('T', ' ') }, { ts: toTs, iso: new Date(toTs * 1000).toISOString().slice(0, 19).replace('T', ' ') });
-      AUD.log('owner', 'posts.purge', `Date-range purge on ${nameOrJid(jid)} (${from} → ${to}): ${r.done || 0} deleted${r.errors?.length ? `, ${r.errors.length} failed` : ''}`);
+      AUD.log('owner', 'posts.purge', `Date-range purge on ${nameOrJid(jid)} (${from} → ${to}): ${r.deleted || 0} deletion requests accepted${r.errors?.length ? `, ${r.errors.length} not confirmed` : ''}`);
       res.json({ ok: true, ...r });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
@@ -686,8 +702,8 @@ function build(app) {
     const paused = Boolean(req.body?.paused);
     S.set('mirror.paused', paused ? '1' : '0');
     ring.warn('mirror.pause', paused
-      ? '⏸ ALL mirroring PAUSED from the dashboard — no posts will be published until resumed (nothing is lost: posts are recovered on resume)'
-      : '▶ Mirroring RESUMED — missed posts are being recovered automatically');
+      ? '⏸ Mirroring paused. In-flight operations may still finish; later recovery is best-effort and can miss posts.'
+      : '▶ Mirroring resumed; check recovery and history for missed posts');
     res.json({ ok: true, paused });
   });
 
@@ -762,22 +778,17 @@ function build(app) {
   });
   api.get('/inbox/:jid', (req, res) => res.json({ ok: true, list: inbox.messages(String(req.query.session || 'main'), decodeURIComponent(req.params.jid)) }));
   api.get('/inbox/:jid/media/:id', (req, res) => {
-    const row = inbox.media(String(req.query.session || 'main'), Number(req.params.id));
+    const row = inbox.media(String(req.query.session || 'main'), Number(req.params.id), decodeURIComponent(req.params.jid));
     if (!row) return res.status(404).json({ ok: false, error: 'No stored media for this message (previews are stored when WhatsApp provides them; view-once files are stored by anti-view-once).' });
     /* v9.0.0 (repo-slim): file-backed media first (post-build rows) — the bytes
        live in media/inbox/, not in the cloud-synced database */
-    const rel = String(row.media_file || '');
-    if (rel) {
-      const fp = path.join(cfg.config.paths.media, rel);
-      if (fs.existsSync(fp)) {
-        res.set('Content-Type', row.media_mime || 'application/octet-stream');
-        res.set('Cache-Control', 'private, max-age=86400');
-        return res.sendFile(fp);
-      }
-    }
+    const safeMime=/^(?:image\/(?:jpeg|png|gif|webp)|video\/(?:mp4|webm)|audio\/(?:mpeg|mp4|ogg|wav|webm))$/i.test(String(row.media_mime || '')) ? String(row.media_mime).toLowerCase() : '';
+    const fp=require('../inbox-media-path').resolveInboxMedia(cfg.config.paths.media,row.media_file);
+    res.set('Content-Type',safeMime || 'application/octet-stream');
+    res.set('Cache-Control','private, no-store');
+    if(!safeMime)res.set('Content-Disposition','attachment; filename="attachment.bin"');
+    if(fp && fs.existsSync(fp))return res.sendFile(fp);
     if (!row.media_data) return res.status(404).json({ ok: false, error: 'No stored media for this message (previews are stored when WhatsApp provides them; view-once files are stored by anti-view-once).' });
-    res.set('Content-Type', row.media_mime || 'application/octet-stream');
-    res.set('Cache-Control', 'private, max-age=86400');
     res.send(Buffer.from(row.media_data));
   });
   /* v7.3.6: profile photo for a chat / contact / group / channel
@@ -809,9 +820,8 @@ function build(app) {
       const file = crypto.createHash('sha1').update(url).digest('hex').slice(0, 24) + '.jpg';
       const fp = path.join(AVA_DIR, file);
       if (!fs.existsSync(fp)) {
-        const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
-        if (!r.ok) return res.json({ ok: false, url: '' });
-        fs.writeFileSync(fp, Buffer.from(await r.arrayBuffer()));
+        const data=await require('../safe-public-fetch').fetchPublic(url,{maxBytes:5*1024*1024,timeoutMs:15000});
+        fs.writeFileSync(fp,data.body || data);
       }
       avaMem.set(key, { file, at: Date.now(), url });
       res.redirect('/media/avatars/' + file);
@@ -834,7 +844,7 @@ function build(app) {
   });
   api.delete('/watched/:phone', (req, res) => { inbox.watched.remove(req.params.phone); res.json({ ok: true }); });
   api.post('/bulk', async (req, res) => {
-    try { const r = await inbox.bulkSend(req.body?.recipients, req.body?.text); res.json({ ok: true, ...r }); }
+    try { if(req.body?.consentConfirmed!==true) throw Error('Confirm permission from every recipient before sending.'); const r = await inbox.bulkSend(req.body?.recipients, req.body?.text); res.json({ ok: true, ...r }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
   api.get('/bulk/history', (req, res) => res.json({ ok: true, list: BULKH.list(20) }));
@@ -854,7 +864,8 @@ function build(app) {
       const jid = decodeURIComponent(req.params.jid);
       const text = String(req.body?.text || '').trim();
       if (!text) return res.status(400).json({ ok: false, error: 'Type a message first.' });
-      if (!/@(s\.whatsapp\.net|g\.us)$/.test(jid)) return res.status(400).json({ ok: false, error: 'Not a personal chat or group.' });
+      if (!/^[0-9]{8,15}@s\.whatsapp\.net$/.test(jid)) return res.status(400).json({ ok: false, error: 'Group sending is disabled; use a personal chat.' });
+      if (require('../panic').active() || require('../lifecycle').isStopping()) throw Error('Panic stop or shutdown is active.');
       if (numbers.statusOf(session) !== 'open') throw new Error(session === 'main' ? 'WhatsApp is not connected.' : `Number ${session} is not connected — open Connect (＋) and scan its QR.`);
       const sock = numbers.getSocket(session);
       if (!sock) throw new Error('That number has no live socket right now.');
@@ -932,12 +943,13 @@ function build(app) {
       const fmt = String(req.query.format || 'txt');
       let out;
       if (fmt === 'csv') {
-        const cell = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+        const cell = csvCell;
         out = ['date,time,from,who,text,kind', ...rows.map((r) => [r.ts.slice(0, 10), r.ts.slice(11, 16), r.from_me ? 'me' : 'them', r.sender_name || '', (r.body || '').slice(0, 1000), r.kind || ''].map(cell).join(','))].join('\n');
       } else {
         out = rows.map((r) => `[${r.ts}] ${r.from_me ? 'Me' : (r.sender_name || 'Them')}: ${(r.body || `[${r.kind || 'media'}]` || '').slice(0, 1000)}`).join('\n');
       }
       const base = (jid.split('@')[0] || 'chat').replace(/[^a-z0-9_-]/gi, '');
+      res.set('Cache-Control','private, no-store');
       res.setHeader('Content-Type', fmt === 'csv' ? 'text/csv; charset=utf-8' : 'text/plain; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="raqifluz-chat-${base}.${fmt === 'csv' ? 'csv' : 'txt'}"`);
       res.send(out);
@@ -949,8 +961,14 @@ function build(app) {
     try {
       const session = String(req.query.session || 'main');
       const jid = decodeURIComponent(req.params.jid);
-      const rows = require('../db').open().prepare("SELECT id, ts, kind, media_mime, media_name, LENGTH(media_data) bytes FROM inbox_msgs WHERE session=? AND chat_jid=? AND media_data IS NOT NULL ORDER BY id DESC LIMIT 200").all(session, jid);
-      res.json({ ok: true, list: rows.map((r) => ({ id: r.id, ts: r.ts, kind: r.kind || 'image', mime: r.media_mime || '', name: r.media_name || '', bytes: r.bytes || 0 })) });
+      const rows = require('../db').open().prepare("SELECT id, ts, kind, media_mime, media_name, media_file, LENGTH(media_data) bytes FROM inbox_msgs WHERE session=? AND chat_jid=? AND (media_data IS NOT NULL OR COALESCE(media_file,'') <> '') ORDER BY id DESC LIMIT 200").all(session, jid);
+      const list=[];
+      for(const r of rows){
+        const file=require('../inbox-media-path').resolveInboxMedia(cfg.config.paths.media,r.media_file);let bytes=r.bytes||0;
+        if(file)try{bytes=fs.statSync(file).size}catch{}
+        if(bytes>0)list.push({id:r.id,ts:r.ts,kind:r.kind||'image',mime:r.media_mime||'',name:r.media_name||'',bytes});
+      }
+      res.set('Cache-Control','private, no-store');res.json({ok:true,list});
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
 
@@ -1010,14 +1028,15 @@ function build(app) {
     try {
       const session = String(req.query.session || 'main');
       const list = CT.list(session, 5000);
-      const cell = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      const cell = csvCell;
       const rows = ['phone,name,note,tags', ...list.map((c) => {
         const phone = String(c.jid || '').split('@')[0];
         const tags = CN.forContact(session, c.jid).map((t) => t.name).join('; ');
         const note = CN.get(session, c.jid).note;
         return [phone, inbox.cleanName(c.name || c.notify), note, tags].map(cell).join(',');
       })].join('\n');
-      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.set('Cache-Control','private, no-store');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="raqifluz-contacts.csv"');
       res.send(rows);
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
@@ -1039,6 +1058,7 @@ function build(app) {
   api.post('/broadcast/:id/delete', (req, res) => { BCL.del(Number(req.params.id)); res.json({ ok: true }); });
   api.post('/broadcast/:id/send', async (req, res) => {
     try {
+      if(req.body?.consentConfirmed!==true) return res.status(400).json({ok:false,error:'Confirm permission from every recipient before sending.'});
       const list = BCL.get(Number(req.params.id));
       if (!list) return res.status(400).json({ ok: false, error: 'List not found.' });
       const text = String(req.body?.text || '').trim();
@@ -1095,7 +1115,7 @@ function build(app) {
       const name = String(req.body?.name || '').trim();
       let parsed;
       try { parsed = new URL(url); } catch { return res.status(400).json({ ok: false, error: 'Enter a full feed URL, starting with https://' }); }
-      if (!/^https?:$/.test(parsed.protocol)) return res.status(400).json({ ok: false, error: 'Only http(s) feed URLs are allowed.' });
+      if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || (require('net').isIP(parsed.hostname.replace(/^\[|\]$/g,'')) && !require('../safe-image-fetch').publicAddress(parsed.hostname.replace(/^\[|\]$/g,'')))) return res.status(400).json({ ok: false, error: 'Feed URL must be a public HTTP(S) address without credentials.' });
       const jid = rss.rssJid(url);
       const d = require('../db').open();
       const ex = d.prepare('SELECT * FROM sources WHERE jid=?').get(jid);
@@ -1172,17 +1192,16 @@ function build(app) {
   });
 
   /* ---- 5I (I1): subscriber counts + growth history (best-effort daily snapshots) ---- */
-  api.get('/subs', (req, res) => {
+  api.get('/subs', (req,res)=>{
     try {
-      const d = require('../db').open();
-      const rows = CH.listActiveSources().filter((s) => !s.kind || s.kind === 'wa').map((s) => ({
-        jid: s.jid, name: s.name || s.jid,
-        subs: SUBS.lastFor(s.jid)?.count ?? null,
-        subsDay: SUBS.lastFor(s.jid)?.day ?? null,
-        history: SUBS.history(s.jid, 14)
-      }));
-      res.json({ ok: true, list: rows });
-    } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
+      let sources;
+      if(req.query.jid!==undefined){const ids=Array.isArray(req.query.jid)?req.query.jid:[req.query.jid];
+        if(ids.length>50||ids.some(id=>typeof id!=='string'||id.length>200))return res.status(400).json({ok:false,error:'Specify at most 50 channel IDs.'});
+        sources=[...new Set(ids)].map(id=>CH.getSource(id)).filter(Boolean).filter(s=>!s.paused);
+      }else sources=CH.listActiveSources();
+      const rows=sources.filter(s=>!s.kind||s.kind==='wa').map(s=>{const last=SUBS.lastFor(s.jid);return {jid:s.jid,name:s.name||s.jid,subs:last?.count??null,subsDay:last?.day??null,history:SUBS.history(s.jid,14)}});
+      res.json({ok:true,list:rows});
+    } catch(err){res.status(400).json({ok:false,error:err.message});}
   });
 
   /* ---- 5I (I6): local hashtag frequency — top #words in your own published posts ---- */
@@ -1294,17 +1313,18 @@ function build(app) {
       const limit = Math.max(1, Math.min(400, parseInt(req.query.limit, 10) || 200));
       const rows = [];
       for (const r of d.prepare(
-        `SELECT id, session, chat_jid, ts, kind, media_mime, media_name, LENGTH(media_data) bytes
-           FROM inbox_msgs WHERE session=? AND media_data IS NOT NULL ORDER BY id DESC LIMIT 1000`
+        `SELECT id, session, chat_jid, ts, kind, media_mime, media_name, media_file, LENGTH(media_data) bytes
+           FROM inbox_msgs WHERE session=? AND (media_data IS NOT NULL OR COALESCE(media_file,'') <> '') ORDER BY id DESC LIMIT 1000`
       ).all(session)) {
         if (kind && r.kind !== kind) continue;
         if (q && !((r.media_name || '') + ' ' + (r.chat_jid || '')).toLowerCase().includes(q)) continue;
-        rows.push({ src: 'chat', ref: 'inbox:' + r.id, jid: r.chat_jid, ts: r.ts, kind: r.kind || 'image', mime: r.media_mime || '', name: r.media_name || ('msg-' + r.id), bytes: r.bytes || 0 });
+        const f=require('../inbox-media-path').resolveInboxMedia(cfg.config.paths.media,r.media_file); let size=r.bytes||0; if(f)try{size=fs.statSync(f).size}catch{}
+        if(!size)continue; rows.push({ src: 'chat', ref: 'inbox:' + r.id, jid: r.chat_jid, ts: r.ts, kind: r.kind || 'image', mime: r.media_mime || '', name: r.media_name || ('msg-' + r.id), bytes: size });
       }
       try {
         if (fs5i.existsSync(HOLD_DIR_5I)) {
           for (const f of fs5i.readdirSync(HOLD_DIR_5I)) {
-            const st = fs5i.statSync(path5i.join(HOLD_DIR_5I, f));
+            const st = fs5i.lstatSync(path5i.join(HOLD_DIR_5I, f)); if(!st.isFile() || st.isSymbolicLink())continue;
             const k = f.endsWith('.mp4') ? 'video' : f.endsWith('.bin') ? 'document' : 'image';
             if (kind && k !== kind) continue;
             if (q && !f.toLowerCase().includes(q)) continue;
@@ -1320,16 +1340,19 @@ function build(app) {
     try {
       const ref = String(req.query.ref || '');
       if (ref.startsWith('inbox:')) {
-        const r = require('../db').open().prepare('SELECT media_data, media_mime, media_name, kind FROM inbox_msgs WHERE id=?').get(Number(ref.slice(6)));
-        if (!r || !r.media_data) return res.status(404).json({ ok: false, error: 'Media not found.' });
+        const r = require('../db').open().prepare('SELECT media_data, media_file, media_mime, media_name, kind FROM inbox_msgs WHERE id=?').get(Number(ref.slice(6)));
+        if (!r) return res.status(404).json({ ok: false, error: 'Media not found.' });
+        const file=require('../inbox-media-path').resolveInboxMedia(cfg.config.paths.media,r.media_file); let data=r.media_data; if(file && fs.existsSync(file))data=fs.readFileSync(file);
+        if (!data) return res.status(404).json({ ok: false, error: 'Media not found.' });
         const name = r.media_name || ('file-' + ref.slice(6) + '.' + (r.kind === 'video' ? 'mp4' : r.kind === 'document' ? 'bin' : 'jpg'));
         res.setHeader('Content-Type', r.media_mime || 'application/octet-stream');
-        res.setHeader('Content-Disposition', 'attachment; filename="' + String(name).replace(/"/g, '') + '"');
-        res.send(Buffer.from(r.media_data));
+        res.setHeader('Content-Disposition', 'attachment; filename="' + String(name).replace(/[\"\r\n]/g, '') + '"');
+        res.send(Buffer.from(data));
       } else if (ref.startsWith('hold:')) {
         const f = path5i.basename(ref.slice(5)); // never trust the rest of the path
         const p = path5i.join(HOLD_DIR_5I, f);
         if (!fs5i.existsSync(p)) return res.status(404).json({ ok: false, error: 'File not found.' });
+        const st=fs5i.lstatSync(p);if(!st.isFile()||st.isSymbolicLink())return res.status(400).json({ok:false,error:'Unsafe media file.'});
         res.download(p);
       } else return res.status(400).json({ ok: false, error: 'Bad reference.' });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
@@ -1338,7 +1361,10 @@ function build(app) {
     try {
       const ref = String(req.body?.ref || '');
       if (ref.startsWith('inbox:')) {
-        const n = require('../db').open().prepare('UPDATE inbox_msgs SET media_data=NULL, media_mime=NULL, media_name=NULL WHERE id=?').run(Number(ref.slice(6)));
+        const db=require('../db').open(), id=Number(ref.slice(6)), row=db.prepare('SELECT media_file FROM inbox_msgs WHERE id=?').get(id);
+        if(!row)return res.status(404).json({ok:false,error:'Media not found.'});
+        const file=require('../inbox-media-path').resolveInboxMedia(cfg.config.paths.media,row.media_file);if(file && fs.existsSync(file))fs.unlinkSync(file);
+        const n=db.prepare("UPDATE inbox_msgs SET media_data=NULL, media_file='', media_mime=NULL, media_name=NULL, media_cleared=1 WHERE id=?").run(id);
         if (!n.changes) return res.status(404).json({ ok: false, error: 'Media not found.' });
         try { AUD.log('owner', 'media.delete', `Chat media removed from storage (msg ${ref.slice(6)})`); } catch { }
         return res.json({ ok: true });
@@ -1347,6 +1373,8 @@ function build(app) {
         const f = path5i.basename(ref.slice(5));
         const p = path5i.join(HOLD_DIR_5I, f);
         if (!fs5i.existsSync(p)) return res.status(404).json({ ok: false, error: 'File not found.' });
+        if(!fs5i.lstatSync(p).isFile() || fs5i.lstatSync(p).isSymbolicLink()) return res.status(400).json({ok:false,error:'Unsafe media file.'});
+        if(require('../db').open().prepare("SELECT 1 FROM approvals WHERE media_path=? AND status IN ('pending','approved') LIMIT 1").get(p))return res.status(409).json({ok:false,error:'This file is needed by an unresolved approval.'});
         fs5i.unlinkSync(p);
         try { AUD.log('owner', 'media.delete', `Queued media file removed: ${f}`); } catch { }
         return res.json({ ok: true });
@@ -1470,12 +1498,12 @@ function build(app) {
   });
 
   /* ---- v6.3: email (multiple accounts, compose, bulk, scheduling) ---- */
-  api.get('/email/accounts', (req, res) => res.json({ ok: true, list: email.publicAccounts(), presets: email.presetList() }));
+  api.get('/email/accounts', (req, res) => {res.set('Cache-Control','no-store');try{res.json({ok:true,list:email.publicAccounts(),presets:email.presetList(),security:email.securityStatus()});}catch(err){res.status(500).json({ok:false,error:String(err.message||err).slice(0,180)});}});
   api.post('/email/accounts', (req, res) => {
     try { const a = email.addAccount(req.body || {}); res.json({ ok: true, account: a }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
-  api.delete('/email/accounts/:id', (req, res) => { email.removeAccount(req.params.id); res.json({ ok: true }); });
+  api.delete('/email/accounts/:id', (req, res) => { try{email.removeAccount(req.params.id);res.json({ok:true});}catch(err){res.status(400).json({ok:false,error:String(err.message||err).slice(0,180)});} });
   api.post('/email/accounts/:id/default', (req, res) => {
     try { email.setDefault(req.params.id); res.json({ ok: true }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
@@ -1484,12 +1512,28 @@ function build(app) {
     try { const result = await email.testAccount(req.body?.id); res.json({ ok: true, result }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
-  api.post('/email/send', async (req, res) => {
-    try { const r = await email.sendOrQueue(req.body || {}); res.json({ ok: true, ...r }); }
-    catch (err) { res.status(400).json({ ok: false, error: err.message }); }
+  api.get('/email/requests/:id',(req,res)=>{
+    res.set('Cache-Control','no-store');
+    if(req.authRole==='readonly')return res.status(403).json({ok:false,error:'Owner access required.'});
+    try{const r=require('../email-requests').get(req.params.id);if(!r)return res.status(404).json({ok:false,error:'Request not found.'});res.json({ok:true,record:r});}catch(e){res.status(400).json({ok:false,error:e.message});}
   });
-  api.get('/email/history', (req, res) => res.json({ ok: true, list: email.history(60), queue: email.pendingQueue() }));
-  api.post('/email/queue/:id/cancel', (req, res) => { email.cancelQueued(req.params.id); res.json({ ok: true }); });
+  api.post('/email/send', async (req, res) => {
+    const journal=require('../email-requests');let id='',claimed=false;
+    try {
+      const b=req.body||{}; id=b.requestId == null ? crypto.randomUUID() : String(b.requestId);
+      if(!journal.validId(id))return res.status(400).json({ok:false,error:'Invalid request ID.'});
+      // If no request exists yet, a locked credential fails before the
+      // idempotency claim; already-completed requests can still be inspected.
+      if(!journal.get(id))email.verifyCredential(b.accountId);
+      const claim=journal.begin(id,journal.digest(b));
+      if(claim.conflict)return res.status(409).json({ok:false,error:'Request ID already used for different email content.'});
+      if(!claim.started){if(claim.record.state==='completed' && claim.record.result)return res.json({...claim.record.result,requestId:id,replayed:true});return res.status(409).json({ok:false,error:'Email request is in progress or needs review. Check email history before another send.',requestId:id,state:claim.record.state});}
+      claimed=true;const result={ok:true,...await email.sendOrQueue(b)};journal.complete(id,result);res.json({...result,requestId:id,replayed:false});
+    } catch (err) {if(claimed)try{journal.review(id)}catch{} res.status(400).json({ ok: false, error: String(err.message||err).slice(0,200),requestId:id||undefined }); }
+  });
+  api.get('/email/history', (req, res) => {res.set('Cache-Control','no-store');res.json({ ok: true, list: email.history(60), queue: email.pendingQueue() });});
+  api.post('/email/queue/:id/cancel', (req, res) => {try {if(req.body?.confirmed!==true)throw Error('Confirm cancellation first.');email.cancelQueued(req.params.id); res.json({ ok: true });}catch(e){res.status(400).json({ok:false,error:e.message});}});
+  api.post('/email/queue/:id/reviewed', (req,res)=>{try{email.resolveQueued(req.params.id,req.body?.confirmed);res.json({ok:true});}catch(e){res.status(400).json({ok:false,error:e.message});}});
 
   /* ---- v6.1: AI chat ("Ask AI" tab) ---- */
   api.get('/ai/chat', (req, res) => res.json({ ok: true, list: AICHAT.history(40) }));
@@ -1508,22 +1552,52 @@ function build(app) {
   api.delete('/ai/chat', (req, res) => { AICHAT.clear(); res.json({ ok: true }); });
 
   /* ---- v6.1: composer — publish a custom post from the dashboard ---- */
-  api.post('/compose', async (req, res) => {
+  // Telegram journals can contain unpublished text; only the owner may access them.
+  api.use('/telegram', (req,res,next)=>req.authRole==='readonly' ? res.status(403).json({ok:false,error:'Owner access required.'}) : next());
+  api.get('/telegram',(req,res)=>{res.set('Cache-Control','no-store');try{const t=require('../telegram-publish');res.json({ok:true,configured:t.configured(),recent:t.recent()});}catch{res.status(500).json({ok:false,error:'Telegram status unavailable.'});}});
+  api.get('/telegram/requests/:id',(req,res)=>{res.set('Cache-Control','no-store');try{const r=require('../telegram-publish').status(req.params.id);if(!r)return res.status(404).json({ok:false,error:'Request not found.'});res.json({ok:true,record:r});}catch(e){res.status(400).json({ok:false,error:e.message});}});
+  api.get('/telegram/schedules',(req,res)=>{res.set('Cache-Control','no-store');try{res.json({ok:true,list:require('../telegram-schedules').list()});}catch{res.status(500).json({ok:false,error:'Telegram schedules unavailable.'});}});
+  api.get('/telegram/schedules/:id',(req,res)=>{res.set('Cache-Control','no-store');try{const r=require('../telegram-schedules').get(req.params.id);if(!r)return res.status(404).json({ok:false,error:'Schedule not found.'});res.json({ok:true,record:r});}catch(e){res.status(400).json({ok:false,error:e.message});}});
+  api.post('/telegram/schedules',(req,res)=>{try{const r=require('../telegram-schedules').create(req.body);if(r.conflict)return res.status(409).json({ok:false,error:'Request ID already used for different content.'});res.json({ok:true,...r});}catch(e){res.status(400).json({ok:false,error:String(e.message||e).slice(0,200)});}});
+  api.post('/telegram/schedules/:id/cancel',(req,res)=>{try{res.json({ok:true,record:require('../telegram-schedules').cancel(req.params.id,req.body?.confirmed)});}catch(e){res.status(400).json({ok:false,error:String(e.message||e).slice(0,200)});}});
+  api.post('/telegram/publish',async(req,res)=>{try{const r=await require('../telegram-publish').publish(req.body);if(r.conflict)return res.status(409).json({ok:false,error:'Request ID already used for different content.'});res.json({ok:true,...r});}catch(e){res.status(400).json({ok:false,error:String(e.message||e).slice(0,200)});}});
+  api.get('/compose/requests/:id', (req,res) => {
+    const requests=require('../compose-requests'), id=String(req.params.id || '');
+    if (!requests.validId(id)) return res.status(400).json({ok:false,error:'Invalid request ID.'});
+    const record=requests.get(id); if(!record) return res.status(404).json({ok:false,error:'Request not found.'});
+    res.set('Cache-Control','no-store');
+    res.json({ok:true, requestId:record.id, state:record.state, result:record.result, startedAt:record.startedAt, updatedAt:record.updatedAt});
+  });
+  api.post('/compose', express.json({limit:'8mb'}), async (req, res) => {
+    const requests=require('../compose-requests'); let requestId='', requestStarted=false;
     try {
       const text = String(req.body?.text || '').trim();
       const imageUrls = String(req.body?.imageUrl || '').trim();
       const upB64 = String(req.body?.imageB64 || '');   // 5B: uploaded file (base64)
       const doBeautify = Boolean(req.body?.beautify);
+      requestId = req.body?.requestId == null ? crypto.randomUUID() : String(req.body.requestId);
+      if (!requests.validId(requestId)) return res.status(400).json({ok:false,error:'Invalid request ID.'});
+      const rawTargets = Array.isArray(req.body?.targets) ? req.body.targets.map(String).sort() : null;
+      const fingerprint = requests.digest({text,imageUrl:imageUrls,imageB64:upB64,imageMime:String(req.body?.imageMime || ''),beautify:doBeautify,targets:rawTargets});
+      const previous = requests.get(requestId);
+      if (previous) {
+        if (previous.digest !== fingerprint) return res.status(409).json({ok:false,error:'Request ID was already used for different content or targets.',requestId});
+        if (previous.state === 'completed' && previous.result) return res.json({...previous.result,requestId,replayed:true});
+        return res.status(409).json({ok:false,error:'This request is already in progress or needs review. Check history and Delivery review before starting a new send.',requestId,state:previous.state});
+      }
       const active = CH.listActiveTargets().map((t) => t.jid);
+      if (Array.isArray(req.body?.targets) && !req.body.targets.length) return res.status(400).json({ok:false,error:'Select at least one target before publishing.'});
       const chosen = (Array.isArray(req.body?.targets) ? req.body.targets : []).map(String).filter((j) => active.includes(j));
       if (Array.isArray(req.body?.targets) && req.body.targets.length && chosen.length !== new Set(req.body.targets.map(String)).size) return res.status(400).json({ok:false,error:'A selected target is missing or paused. Check targets before sending.'});
       if (!text && !imageUrls && !upB64) return res.status(400).json({ ok: false, error: 'Write a post, add an image URL or upload a photo.' });
+      if (text.length > 60000) return res.status(400).json({ok:false,error:'Post text must be 60,000 characters or less.'});
       if (!active.length) return res.status(400).json({ ok: false, error: 'No active target channels — add one in the Targets tab.' });
       const sock = wa.getSocket();
       if (!sock || wa.getStatus().status !== 'open') throw new Error('WhatsApp is not connected.');
 
       let finalText = text;
       if (doBeautify && text) finalText = await ai.beautify(text);
+      if (finalText.length > 60000) return res.status(400).json({ok:false,error:'Processed post exceeds 60,000 characters. Review and shorten it.'});
       const only = chosen.length ? chosen : active;
 
       // optional image: uploaded file (5B) or public URL — 5 MB cap either way
@@ -1537,19 +1611,33 @@ function build(app) {
         content = { image: buf, caption: finalText || undefined, mimetype: mime };
       } else if (imageUrls) {
         if (!/^https:\/\//i.test(imageUrls) && !/^http:\/\//i.test(imageUrls)) return res.status(400).json({ ok: false, error: 'Image URL must start with http(s)://' });
-        const imgRes = await fetch(imageUrls, { signal: AbortSignal.timeout(20000) });
-        if (!imgRes.ok) throw new Error(`Image could not be fetched (HTTP ${imgRes.status}).`);
-        const buf = Buffer.from(await imgRes.arrayBuffer());
-        if (buf.length > 5 * 1024 * 1024) throw new Error('Image is larger than 5 MB.');
-        if (!/image\//.test(imgRes.headers.get('content-type') || '')) throw new Error('That URL is not an image.');
-        content = { image: buf, caption: finalText || undefined, mimetype: imgRes.headers.get('content-type') };
+        const img = await require('../safe-image-fetch').fetchImage(imageUrls);
+        content = { image: img.buffer, caption: finalText || undefined, mimetype: img.mime };
       } else {
         content = { text: finalText };
       }
-      const r = await publishMod.publish(content, { sourceJid: 'system:compose', sourceMsgId: `compose-${crypto.randomUUID()}`, only, hasMedia: Boolean(imageUrls || upB64), norm: finalText.slice(0, 400) });
+      // Compose promises long-text splitting as well as the automated pipeline.
+      // Attach media only to the first numbered part, and preserve order.
+      if (finalText.length > 4096) {
+        const chunks = require('../pipeline').splitParts(finalText, 4096);
+        content = { parts:chunks.map((part,i)=>i===0 && (upB64 || imageUrls) ? {...content,caption:part} : {text:part}) };
+      }
+      const claim=requests.begin(requestId,fingerprint);
+      if (!claim.started) {
+        if (claim.conflict) return res.status(409).json({ok:false,error:'Request ID was already used for different content or targets.',requestId});
+        if (claim.record.state==='completed' && claim.record.result) return res.json({...claim.record.result,requestId,replayed:true});
+        return res.status(409).json({ok:false,error:'This request is already in progress or needs review. Check history and Delivery review before starting a new send.',requestId,state:claim.record.state});
+      }
+      requestStarted=true;
+      const r = await publishMod.publish(content, { sourceJid: 'system:compose', sourceMsgId: `compose-${requestId}`, only, hasMedia: Boolean(imageUrls || upB64), norm: finalText.slice(0, 400) });
       ring.info('compose.sent', `Dashboard post: ${r.sent} accepted, ${r.failed} need attention`);
-      res.json({ ok: true, sent: r.sent, failed:r.failed, complete:r.complete === true, errors:r.errors, text: finalText });
-    } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
+      const result={ok:true,sent:r.sent,failed:r.failed,complete:r.complete===true,errors:r.errors,text:finalText};
+      requests.complete(requestId,result);
+      res.json({...result,requestId,replayed:false});
+    } catch (err) {
+      if (requestStarted) { try { requests.review(requestId,err.message); } catch {} }
+      res.status(400).json({ok:false,error:err.message,requestId:requestId || undefined});
+    }
   });
 
   /* ---- 5B (R50) + 5C (R55): composer AI — Improve/Shorten/Formal/Translate/Emojify + prompt library ---- */
@@ -1735,6 +1823,7 @@ function build(app) {
   /* ---- R63: CSV / PDF export (range = the analytics picker) ---- */
   api.get('/analytics/export.csv', (req, res) => {
     const days = Math.min(30, Math.max(7, parseInt(req.query.days || '14', 10) || 14));
+    res.set('Cache-Control','private, no-store');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="raqifluz-posts-${days}d.csv"`);
     res.send(exp.csv(days));
@@ -1797,12 +1886,17 @@ function build(app) {
   api.get('/audit.csv', (req, res) => {
     const rows = AUD.recent(5000);
     const csv = ['ts,actor,action,detail', ...rows.map((r) => [r.ts, r.actor, r.action, r.detail].map(csvCell).join(','))].join('\n');
+    res.set('Cache-Control','private, no-store');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="raqifluz-audit.csv"');
     res.send(csv);
   });
 
   /* ---- R70: local backup download + restore (with automatic pre-restore snapshot) ---- */
+  api.get('/backup/full-download', async (req,res) => {
+    let snap;try {snap=await require('../full-backup').create();res.set('Cache-Control','no-store');res.download(snap.zipPath,'raqifluz-complete-backup.zip',()=>{try{fs.rmSync(snap.dir,{recursive:true,force:true})}catch{}});}
+    catch(e){if(snap)fs.rmSync(snap.dir,{recursive:true,force:true});if(!res.headersSent)res.status(500).json({ok:false,error:'Complete backup failed; check storage and logs.'});}
+  });
   api.get('/backup/download', (req, res) => {
     try {
       const zip = backup.downloadZip();
@@ -1813,13 +1907,23 @@ function build(app) {
       res.send(zip);
     } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
+  api.post('/backup/preview', express.raw({ type: ['application/zip', 'application/octet-stream', 'application/x-sqlite3', 'application/vnd.sqlite3', 'text/plain'], limit: '200mb' }), (req,res) => {
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length < 100) return res.status(400).json({ok:false,error:'Upload a backup zip or SQLite database first.'});
+      res.json({ok:true, ...backup.previewFromBuffer(req.body)});
+    } catch (err) { res.status(400).json({ok:false,error:err.message}); }
+  });
   api.post('/backup/restore', express.raw({ type: ['application/zip', 'application/octet-stream', 'application/x-sqlite3', 'application/vnd.sqlite3', 'text/plain'], limit: '200mb' }), (req, res) => {
     try {
       if (!Buffer.isBuffer(req.body) || req.body.length < 100) return res.status(400).json({ ok: false, error: 'Upload a backup zip (or a raw bot.sqlite) first.' });
+      const expected = String(req.get('x-backup-sha256') || '');
+      if (!/^[a-f0-9]{64}$/.test(expected) || crypto.createHash('sha256').update(req.body).digest('hex') !== expected) return res.status(400).json({ok:false,error:'The uploaded backup differs from the preview or was not previewed. Preview it again.'});
+      if(req.get('x-restore-confirmed')!=='true')return res.status(400).json({ok:false,error:'Confirm the restore after reviewing the preview.'});
+      if(!panic.active())return res.status(409).json({ok:false,error:'Engage panic stop before restoring. In-flight requests cannot be recalled; offline recovery is safer.'});
       const r = backup.restoreFromBuffer(req.body);
       AUD.log('owner', 'backup.restore', `Restored from upload — pre-restore snapshot kept as ${r.preRestore}`);
       try { require('../db').NTF.add('backup', `Backup restored — previous state saved as ${r.preRestore} (download it from Backup & restore).`); } catch { }
-      res.json({ ok: true, preRestore: r.preRestore, message: 'Restored. Pre-restore snapshot kept — the dashboard will reflect the restored state.' });
+      res.json({ ok: true, preRestore: r.preRestore, message: 'Restored with panic stop active and mirroring paused. Review scheduled jobs before resuming; in-flight work may have completed.' });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
   api.get('/backup/pre-restore', (req, res) => res.json({ ok: true, list: backup.listPreRestore() }));
@@ -1890,7 +1994,8 @@ function build(app) {
     /* v9.0.0 (repo-slim) — the new slim fields (cloud sync state + on-disk inbox media) */
     let cloud = { enabled: false, lastSyncAt: '', lastKB: 0, skips: 0, lastSyncReason: '' };
     let inboxMedia = { bytes: 0, files: 0 };
-    let keepDays = 30;
+    let keepDays = 30; let disk=null;
+    try{const st=fs.statfsSync(path.dirname(cfg.config.paths.database)); disk={available:Number(st.bavail)*Number(st.bsize),total:Number(st.blocks)*Number(st.bsize)};}catch{}
     try {
       cloud = require('../persist').publicStatus();
       inboxMedia.bytes = require('../db').IB.inboxMediaBytes();
@@ -1901,24 +2006,27 @@ function build(app) {
     res.json({
       ok: true,
       db: { bytes: dbBytes },
-      mediaHold: dirSize(path.join(__dirname, '..', 'data', 'media-hold')),
-      avatars: dirSize(path.join(__dirname, '..', 'data', 'avatars')),
+      mediaHold: dirSize(path.join(path.dirname(cfg.config.paths.database), 'media-hold')),
+      avatars: dirSize(AVA_DIR),
       preRestore: { files: backup.listPreRestore().length, bytes: backup.listPreRestore().reduce((a, x) => a + x.bytes, 0) },
       rows,
       github,
       cloud,
-      inboxMedia,
-      keepDays
+      inboxMedia, disk,
+      keepDays, autoPrune: S.getBool('inbox.mediaPruneEnabled',false), deletePublishedMedia: S.getBool('inbox.deletePublishedMedia',false)
     });
   });
   /* v9.0.0 (repo-slim): set the inbox-media retention, then prune immediately */
   api.post('/storage/keepdays', (req, res) => {
     try {
       const days = Math.min(365, Math.max(1, parseInt(req.body?.days, 10) || 30));
-      require('../db').S.set('inbox.mediaKeepDays', String(days));
-      const r = require('../housekeep').sweep();
-      AUD.log('owner', 'storage.keepdays', `Inbox media retention set to ${days} day(s); immediate sweep removed ${r.files} file(s) + ${r.blobs} BLOB(s)`);
-      res.json({ ok: true, days, detail: `Inbox media older than ${days} day(s) removed (${r.files} file(s), ${r.blobs} BLOB(s)). The database — and therefore the cloud snapshot — stays small.` });
+      const autoPrune = req.body?.autoPrune === undefined ? S.getBool('inbox.mediaPruneEnabled',false) : req.body.autoPrune === true;
+      const deletePublished = req.body?.deletePublished === undefined ? S.getBool('inbox.deletePublishedMedia',false) : req.body.deletePublished === true;
+      if (((autoPrune && !S.getBool('inbox.mediaPruneEnabled',false)) || (deletePublished && !S.getBool('inbox.deletePublishedMedia',false))) && req.body?.confirmed !== true) return res.status(400).json({ok:false,error:'Confirm that automatic media deletion may remove files before enabling it.'});
+      S.set('inbox.mediaKeepDays',String(days)); S.set('inbox.mediaPruneEnabled',autoPrune?'1':'0'); S.set('inbox.deletePublishedMedia',deletePublished?'1':'0');
+      const r = autoPrune ? require('../housekeep').sweep() : {files:0,blobs:0};
+      AUD.log('owner','storage.keepdays',`Inbox media retention ${days} days; auto cleanup ${autoPrune?'enabled':'disabled'}; immediate cleanup ${r.files} files and ${r.blobs} blobs`);
+      res.json({ok:true,days,autoPrune,deletePublished,detail:autoPrune ? `Automatic media deletion enabled; removed ${r.files} files and ${r.blobs} stored media blobs.` : 'Automatic age-based media deletion is off. Existing media was kept.'});
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
   /* v9.0.0 (repo-slim): one-click "Compact cloud memory" — force a fresh
@@ -1935,20 +2043,22 @@ function build(app) {
       const kind = String(req.body?.kind || '');
       const days = Math.min(365, Math.max(1, parseInt(req.body?.days, 10) || 30));
       const cutoff = Date.now() - days * 86400e3;
+      if(kind!=='vacuum' && req.body?.confirmed!==true)return res.status(400).json({ok:false,error:'Confirm cleanup before deleting data.'});
       let detail = '';
       if (kind === 'media') {
         let n = 0;
-        const dir = path.join(__dirname, '..', 'data', 'media-hold');
-        for (const f of fs.readdirSync(dir)) {
+        const dir = path.join(path.dirname(cfg.config.paths.database), 'media-hold');
+        const referenced=new Set(require('../db').open().prepare("SELECT media_path FROM approvals WHERE COALESCE(media_path,'') <> ''").all().map(r=>path.basename(r.media_path)));
+        for (const f of fs.existsSync(dir)?fs.readdirSync(dir):[]) {
           try {
-            const st = fs.statSync(path.join(dir, f));
-            if (st.isFile() && st.mtimeMs < cutoff) { fs.unlinkSync(path.join(dir, f)); n += 1; }
+            const st = fs.lstatSync(path.join(dir, f));
+            if (st.isFile() && !st.isSymbolicLink() && !referenced.has(f) && st.mtimeMs < cutoff) { fs.unlinkSync(path.join(dir, f)); n += 1; }
           } catch { }
         }
         /* v9.0.0 (repo-slim): inbox media (on-disk cache + legacy BLOBs) too —
            the two things that used to make the database — and the repo — grow */
         const m = require('../db').IB.pruneMedia(days);
-        detail = `Removed ${n} media-hold file(s) + ${m.files} inbox media file(s) + ${m.blobs} old media BLOB(s) older than ${days} days`;
+        detail = `Removed ${n} unreferenced media-hold file(s) + ${m.files} inbox media file(s) + ${m.blobs} old media BLOB(s) older than ${days} days`;
       } else if (kind === 'logs') {
         const r = require('../db').open().prepare("DELETE FROM logs WHERE ts < ?").run(new Date(cutoff).toISOString().slice(0, 19).replace('T', ' '));
         detail = `Removed ${r.changes} log line(s) older than ${days} days`;
@@ -1956,6 +2066,7 @@ function build(app) {
         const r = require('../db').open().prepare("DELETE FROM posts WHERE status IN ('failed','skipped') AND created_at < ?").run(new Date(cutoff).toISOString().slice(0, 19).replace('T', ' '));
         detail = `Removed ${r.changes} old failed/skipped post record(s) (published posts are never touched)`;
       } else if (kind === 'vacuum') {
+        let dbBytes=0;try{dbBytes=fs.statSync(cfg.config.paths.database).size}catch{}
         require('../db').open().exec('PRAGMA wal_checkpoint(TRUNCATE)');
         require('../db').open().exec('VACUUM');
         detail = `Vacuumed the database (freed ${Math.round((dbBytes - fs.statSync(cfg.config.paths.database).size) / 1024)} KB, if any)`;
@@ -2004,9 +2115,13 @@ function build(app) {
       if (!text) return res.status(400).json({ ok: false, error: 'Nothing to send — write a post first.' });
       const sock = wa.getSocket();
       if (!sock || wa.getStatus().status !== 'open') throw new Error('WhatsApp is not connected.');
-      await wa.sendToChannel(sock, phone + '@s.whatsapp.net', { text: text.slice(0, 6000) });
-      AUD.log('owner', 'compose.test-send', `Test message sent to +${phone}`);
-      res.json({ ok: true });
+      if (require('../panic').active() || require('../lifecycle').isStopping()) throw Error('Panic stop or shutdown is active; no test message was started.');
+      const ownPhone=String(wa.getStatus().phone || '').replace(/\D/g,'');
+      if(!/^\d{8,15}$/.test(ownPhone)||phone!==ownPhone)throw Error('Test messages can only be sent to the connected account’s verified own number.');
+      try { await wa.sendToChannel(sock, phone + '@s.whatsapp.net', { text: text.slice(0, 6000) }); }
+      catch { throw Error('Test message outcome is not confirmed. Check WhatsApp before trying again.'); }
+      AUD.log('owner', 'compose.test-send', `Test request accepted for +${phone}; delivery is not confirmed`);
+      res.json({ ok: true, accepted: true, note: 'Request accepted; check WhatsApp to verify delivery.' });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
 
@@ -2046,14 +2161,16 @@ function build(app) {
     try { await require('../persist').backupNow(); res.json({ ok: true, message: 'cloud-state synced (manual)' }); }
     catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
-  const csvCell = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""').replace(/\r?\n/g, ' ')}"`;
+  const {csvCell} = require('../csv-safe');
   api.get('/export/posts.csv', (req, res) => {
     const rows = A.recent(500);
     const csv = ['id,when,source,status,detail', ...rows.map((r) => [r.id, r.created_at, r.source_jid, r.status, r.reason].map(csvCell).join(','))].join('\n');
+    res.set('Cache-Control','private, no-store');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', 'attachment; filename="raqifluz-posts.csv"');
     res.send(csv);
   });
   api.get('/export/logs.csv', (req, res) => {
+    res.set('Cache-Control','private, no-store');
     const rows = require('../db').open().prepare('SELECT rowid AS id, * FROM logs ORDER BY rowid DESC LIMIT 2000').all();
     const csv = ['id,when,level,code,message', ...rows.map((r) => [r.id, r.ts, r.level, r.code, r.msg].map(csvCell).join(','))].join('\n');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8'); res.setHeader('Content-Disposition', 'attachment; filename="raqifluz-logs.csv"');
@@ -2064,7 +2181,7 @@ function build(app) {
   api.get('/settings', (req, res) => res.json({
     ok: true, botName: S.get('bot_name', cfg.config.botName),
     reportPhone: S.get('report.phone', ''), reportAt: cfg.config.reportAt,
-    automonitor: channels.autoMonitorFlag(),
+    automonitor: channels.autoMonitorFlag(), autoTarget: channels.autoTargetFlag(),
     blocklist: S.get('blocklist.words', ''),
     maxPerHour: S.get('guard.maxperhour', '30'),
     blocklistRegex: S.getBool('blocklist.regex', false), // 5F (R79): OFF by default (plain words)
@@ -2088,32 +2205,38 @@ function build(app) {
   }));
   api.post('/settings', (req, res) => {
     const b = req.body || {};
-    if (b.botName != null) S.set('bot_name', String(b.botName).slice(0, 60));
-    if (b.reportPhone != null) S.set('report.phone', String(b.reportPhone).replace(/\D/g, '').slice(0, 15));
-    if (b.automonitor != null) channels.setAutoMonitor(Boolean(b.automonitor));
-    if (b.blocklist != null) S.set('blocklist.words', String(b.blocklist).slice(0, 1000));
-    if (b.maxPerHour != null) S.set('guard.maxperhour', String(Math.max(3, parseInt(b.maxPerHour, 10) || 30)));
-    if (b.blocklistRegex != null) S.set('blocklist.regex', b.blocklistRegex ? '1' : '0');
-    if (b.replaceRules != null) S.set('replace.rules', String(b.replaceRules).slice(0, 2000));
-    if (b.signatureText != null) S.set('power.signature.text', String(b.signatureText).slice(0, 200));
-    if (b.headerText != null) S.set('power.header.text', String(b.headerText).slice(0, 200));
-    if (b.translateLang != null) S.set('ai.translate.lang', String(b.translateLang).slice(0, 40));
-    if (b.digestAt != null) S.set('digest.at', /^\d{2}:\d{2}$/.test(String(b.digestAt)) ? String(b.digestAt) : '22:00');
-    if (b.aiPrompt != null) S.set('ai.prompt', String(b.aiPrompt).slice(0, 1500));
-    if (b.aireplyPrompt != null) S.set('power.aireply.prompt', String(b.aireplyPrompt).slice(0, 800));
+    if ((b.automonitor != null && typeof b.automonitor !== 'boolean') || (b.autoTarget != null && typeof b.autoTarget !== 'boolean')) return res.status(400).json({ok:false,error:'Automatic channel settings must be true or false.'});
+    if ((b.blocklistRegex != null && typeof b.blocklistRegex !== 'boolean') || (b.setupDone != null && typeof b.setupDone !== 'boolean')) return res.status(400).json({ok:false,error:'Boolean settings must be true or false.'});
+    const pending = [], set = (key, value) => pending.push([key,value]);
+    if (b.automonitor != null) set('channels.automonitor', b.automonitor ? '1' : '0');
+    if (b.autoTarget != null) set('channels.autotarget', b.autoTarget ? '1' : '0');
+    if (b.botName != null) set('bot_name', String(b.botName).slice(0, 60));
+    if (b.reportPhone != null) set('report.phone', String(b.reportPhone).replace(/\D/g, '').slice(0, 15));
+    if (b.blocklist != null) set('blocklist.words', String(b.blocklist).slice(0, 1000));
+    if (b.maxPerHour != null) set('guard.maxperhour', String(Math.max(3, parseInt(b.maxPerHour, 10) || 30)));
+    if (b.blocklistRegex != null) set('blocklist.regex', b.blocklistRegex ? '1' : '0');
+    if (b.replaceRules != null) set('replace.rules', String(b.replaceRules).slice(0, 2000));
+    if (b.signatureText != null) set('power.signature.text', String(b.signatureText).slice(0, 200));
+    if (b.headerText != null) set('power.header.text', String(b.headerText).slice(0, 200));
+    if (b.translateLang != null) set('ai.translate.lang', String(b.translateLang).slice(0, 40));
+    if (b.digestAt != null) set('digest.at', /^\d{2}:\d{2}$/.test(String(b.digestAt)) ? String(b.digestAt) : '22:00');
+    if (b.aiPrompt != null) set('ai.prompt', String(b.aiPrompt).slice(0, 1500));
+    if (b.aireplyPrompt != null) set('power.aireply.prompt', String(b.aireplyPrompt).slice(0, 800));
     /* 5A */
-    if (b.queueDelayMin != null) S.set('queue.delay.min', String(Math.max(0, Math.min(1440, parseInt(b.queueDelayMin, 10) || 0))));
-    if (b.crossDedupeWindowMin != null) S.set('crossdedupe.window.min', String(Math.max(1, Math.min(1440, parseInt(b.crossDedupeWindowMin, 10) || 30))));
-    if (b.sourceEditPolicy != null && ['ignore', 'mark', 'update'].includes(b.sourceEditPolicy)) S.set('post.sourceedit.policy', b.sourceEditPolicy);
+    if (b.queueDelayMin != null) set('queue.delay.min', String(Math.max(0, Math.min(1440, parseInt(b.queueDelayMin, 10) || 0))));
+    if (b.crossDedupeWindowMin != null) set('crossdedupe.window.min', String(Math.max(1, Math.min(1440, parseInt(b.crossDedupeWindowMin, 10) || 30))));
+    if (b.sourceEditPolicy != null && ['ignore', 'mark', 'update'].includes(b.sourceEditPolicy)) set('post.sourceedit.policy', b.sourceEditPolicy);
     /* 5J (J2/J5/J10) — UI persistence: setup wizard state, Overview KPI order, language */
-    if (b.setupDone != null) S.set('ui.setup.done', b.setupDone ? '1' : '0');
+    if (b.setupDone != null) set('ui.setup.done', b.setupDone ? '1' : '0');
     if (b.kpiOrder != null) {
       const known = ['wa', 'published', 'failed', 'sources', 'nextjob', 'latency'];
       const list = String(b.kpiOrder).split(',').map((x) => x.trim()).filter((x) => known.includes(x));
       for (const k of known) if (!list.includes(k)) list.push(k); // never lose a KPI
-      S.set('ui.kpi.order', list.join(','));
+      set('ui.kpi.order', list.join(','));
     }
-    if (b.lang != null && ['en', 'ur'].includes(String(b.lang))) S.set('ui.lang', String(b.lang));
+    if (b.lang != null && ['en', 'ur'].includes(String(b.lang))) set('ui.lang', String(b.lang));
+    try { S.setMany(pending); }
+    catch { return res.status(500).json({ok:false,error:'Settings could not be saved; no settings in this request were committed.'}); }
     AUD.log('owner', 'settings.save', `Settings saved (${Object.keys(b).filter((k) => b[k] != null).join(', ').slice(0, 120) || 'no fields'})`);
     res.json({ ok: true });
   });
@@ -2142,13 +2265,15 @@ function build(app) {
       if (action === 'edit-approve') {
         const t = String(req.body?.text || '');
         if (!t.trim()) return res.status(400).json({ ok: false, error: 'Text is required.' });
-        queue5a.editText(req.params.id, t);
-        return res.json({ ok: true, item: queue5a.approve(req.params.id, 'edited + approved') });
+        return res.json({ ok: true, item: queue5a.approveEdited(req.params.id, t, 'edited + approved') });
       }
       res.status(400).json({ ok: false, error: 'Unknown action.' });
     } catch (err) { res.status(400).json({ ok: false, error: err.message }); }
   });
-  api.post('/queue/approve-all', (req, res) => res.json({ ok: true, n: queue5a.approveAll() }));
+  api.post('/queue/approve-all', (req, res) => {
+    try { return res.json({ok:true,n:queue5a.approveAll()}); }
+    catch { return res.status(503).json({ok:false,error:'Could not approve the queue; no batch changes were committed.'}); }
+  });
   api.post('/posts/dismiss-failed', (req, res) => {
     try {
       require('../db').open().prepare('UPDATE posts SET dismissed=1 WHERE id=? AND status=\'failed\'').run(Number(req.body?.id || 0));
@@ -2163,35 +2288,29 @@ function build(app) {
     AUD.log('owner', 'queue.delay', `Delay buffer set to ${min} min`);
     res.json({ ok: true, min });
   });
-  api.get('/source-rules', (req, res) => res.json({ ok: true, list: SR.all().map((r) => ({ ...r, name: nameOrJid(r.source_jid) })) }));
-  api.post('/source-rules', (req, res) => {
-    const jid = decodeURIComponent(String(req.params?.jid || req.body?.jid || ''));
-    if (!jid.endsWith('@newsletter')) return res.status(400).json({ ok: false, error: 'A source channel is required.' });
-    const b = req.body || {};
-    SR.save(jid, {
-      approve_first: b.approve_first, active_from: b.active_from, active_to: b.active_to,
-      max_per_day: b.max_per_day, include: b.include, exclude: b.exclude, auto_pause: b.auto_pause, priority: b.priority
-    });
-    AUD.log('owner', 'source.rules', `Rule card saved for ${jid} (approveFirst=${b.approve_first ? 1 : 0}, cap=${b.max_per_day || 0}, hours=${b.active_from || ''}–${b.active_to || ''})`);
-    res.json({ ok: true, rule: SR.get(jid) });
+  api.get('/source-rules', (req,res)=>{
+    if(req.query.jid!==undefined){if(typeof req.query.jid!=='string'||req.query.jid.length>200)return res.status(400).json({ok:false,error:'Invalid source ID.'});const source=CH.getSource(req.query.jid);if(!source)return res.status(404).json({ok:false,error:'Source not found.'});source.name=nameOrJid(source.jid);return res.json({ok:true,source,rule:SR.get(source.jid)});}
+    const nameFor=nameLookup(CH.listSources(),CH.dirList(),CH.listTargets());res.json({ok:true,list:SR.all().map(r=>({...r,name:nameFor(r.source_jid)}))});
   });
-  api.get('/routing-matrix', (req, res) => {
-    const sources = CH.listSources().map((c) => ({ jid: c.jid, name: nameOrJid(c.jid) }));
-    const targets = CH.listTargets().map((c) => ({ jid: c.jid, name: nameOrJid(c.jid) }));
-    const cells = RC.cells();
-    res.json({ ok: true, sources, targets, cells, on: pipeline.switches().matrix });
+  api.post('/source-rules', (req,res)=>{
+    const b=req.body||{},jid=typeof b.jid==='string'?b.jid:'';
+    if(jid.length>200||!CH.getSource(jid))return res.status(400).json({ok:false,error:'An existing source is required.'});
+    for(const key of ['approve_first','auto_pause'])if(b[key]!==undefined&&typeof b[key]!=='boolean')return res.status(400).json({ok:false,error:key+' must be true or false.'});
+    for(const key of ['active_from','active_to'])if(b[key]!==undefined&&(typeof b[key]!=='string'||(b[key]!==''&&!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(b[key]))))return res.status(400).json({ok:false,error:key+' must be empty or a valid 24-hour time.'});
+    for(const [key,min,max] of [['max_per_day',0,500],['priority',1,5]])if(b[key]!==undefined&&(!Number.isInteger(b[key])||b[key]<min||b[key]>max))return res.status(400).json({ok:false,error:key+' is out of range.'});
+    for(const key of ['include','exclude'])if(b[key]!==undefined&&(typeof b[key]!=='string'||b[key].length>500))return res.status(400).json({ok:false,error:key+' must be text of at most 500 characters.'});
+    try{SR.save(jid,{approve_first:b.approve_first,active_from:b.active_from,active_to:b.active_to,max_per_day:b.max_per_day,include:b.include,exclude:b.exclude,auto_pause:b.auto_pause,priority:b.priority});AUD.log('owner','source.rules',`Rule card saved for ${jid}`);res.json({ok:true,rule:SR.get(jid)});}catch{return res.status(500).json({ok:false,error:'Rule card could not be saved.'});}
   });
-  api.post('/routing-matrix', (req, res) => {
-    const list = Array.isArray(req.body?.cells) ? req.body.cells : [];
-    for (const c of list.slice(0, 400)) {
-      const sj = decodeURIComponent(String(c.source_jid || ''));
-      const tj = decodeURIComponent(String(c.target_jid || ''));
-      if (!sj.endsWith('@newsletter') || !tj.endsWith('@newsletter')) continue;
-      if (c.enabled === null || c.enabled === undefined && c.reset) RC.del(sj, tj);   // back to default (mapping behavior)
-      else RC.set(sj, tj, Boolean(c.enabled));
-    }
-    AUD.log('owner', 'routing.matrix', `Routing matrix updated (${list.length} cells)`);
-    res.json({ ok: true, cells: RC.cells() });
+  api.get('/routing-matrix', (req,res)=>{
+    const sourceRows=CH.listSources(),targetRows=CH.listTargets(),nameFor=nameLookup(sourceRows,CH.dirList(),targetRows);
+    res.json({ok:true,sources:sourceRows.map(c=>({jid:c.jid,name:nameFor(c.jid)})),targets:targetRows.map(c=>({jid:c.jid,name:nameFor(c.jid)})),cells:RC.cells(),on:pipeline.switches().matrix});
+  });
+  api.post('/routing-matrix', (req,res)=>{
+    const list=req.body?.cells;
+    if(!Array.isArray(list)||list.length>400)return res.status(400).json({ok:false,error:'Specify at most 400 cells.'});
+    const valid=cell=>cell&&typeof cell==='object'&&typeof cell.source_jid==='string'&&typeof cell.target_jid==='string'&&cell.source_jid.length<=200&&cell.target_jid.length<=200&&/^[A-Za-z0-9_.-]+@(?:newsletter|rss)$/.test(cell.source_jid)&&/^[A-Za-z0-9_.-]+@newsletter$/.test(cell.target_jid)&&(cell.enabled===true||cell.enabled===false||cell.enabled===null||(cell.enabled===undefined&&cell.reset===true));
+    if(!list.every(valid))return res.status(400).json({ok:false,error:'Invalid routing cell.'});
+    try{const d=require('../db').open();const set=d.prepare('INSERT INTO routing_cells(source_jid,target_jid,enabled) VALUES(?,?,?) ON CONFLICT(source_jid,target_jid) DO UPDATE SET enabled=excluded.enabled'),del=d.prepare('DELETE FROM routing_cells WHERE source_jid=? AND target_jid=?');d.transaction(()=>{for(const c of list){if(c.enabled===null||c.enabled===undefined)del.run(c.source_jid,c.target_jid);else set.run(c.source_jid,c.target_jid,c.enabled?1:0)}})();AUD.log('owner','routing.matrix',`Routing matrix updated (${list.length} cells)`);res.json({ok:true,cells:RC.cells()});}catch{return res.status(400).json({ok:false,error:'Routing changes could not be saved.'});}
   });
   api.get('/latency', (req, res) => res.json({ ok: true, ...LAT.stats(7) }));
   api.post('/undo-last', async (req, res) => {
@@ -2212,7 +2331,7 @@ function build(app) {
     if (['once', 'daily', 'weekly', 'weekdays', 'interval'].includes(b.repeat)) j.repeat = b.repeat;
     if (b.repeat === 'weekdays' || b.weekdays != null) j.weekdays = String(b.weekdays || j.weekdays || '1,2,3,4,5').slice(0, 20);
     if (b.repeat === 'interval' || b.intervalMin != null) j.intervalMin = Math.max(1, Math.min(10080, parseInt(b.intervalMin, 10) || j.intervalMin || 30));
-    if (b.tz) j.tz = String(b.tz).slice(0, 40);
+    if (b.tz) {try {new Intl.DateTimeFormat('en-GB',{timeZone:String(b.tz)}).format(new Date());}catch{return res.status(400).json({ok:false,error:'Invalid time zone.'});} j.tz = String(b.tz).slice(0, 40);}
     if (b.templateId != null) j.templateId = String(b.templateId || '').slice(0, 120);
     try { power.resave(l); } catch { }
     AUD.log('owner', 'scheduler.edit', `Scheduled post "${j.name || j.id}" updated (repeat=${j.repeat})`);

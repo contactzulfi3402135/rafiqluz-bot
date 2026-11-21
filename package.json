@@ -1,7 +1,7 @@
 {
   "name": "raqifluz-channel-bot",
-  "version": "11.5.0",
-  "description": "Raqifluz Channel Bot v6 — hands-off WhatsApp channel mirroring: follow → clean → publish, with power tools behind owner switches",
+  "version": "11.7.0",
+  "description": "Raqifluz Channel Bot v6 \u2014 hands-off WhatsApp channel mirroring: follow \u2192 clean \u2192 publish, with power tools behind owner switches",
   "main": "src/index.js",
   "license": "MIT",
   "private": true,
@@ -10,7 +10,18 @@
   },
   "scripts": {
     "start": "node --max-old-space-size=320 src/index.js",
-    "test": "node tests/backup-test.js && node tests/archive-test.js && node tests/delivery-test.js && node tests/persist-media-test.js && node tests/migration-test.js && node tests/web-delivery-test.js"
+    "test": "node tests/instance-lock-test.js && node tests/instance-boot-test.js && node tests/service-worker-test.js && node tests/scheduler-time-test.js && node tests/scheduler-cancel-test.js && node tests/email-panic-test.js && node tests/email-vault-test.js && node tests/ai-provider-test.js && node tests/safe-image-test.js && node tests/rss-safety-test.js && node tests/telegram-test.js && node tests/telegram-schedule-test.js && node tests/telegram-restart-test.js && node tests/backup-test.js && node tests/full-backup-test.js && node tests/encrypted-backup-test.js && node tests/archive-test.js && node tests/delivery-test.js && node tests/channel-mutation-test.js && node tests/source-edit-test.js && node tests/persist-media-test.js && node tests/persistence-safety-test.js && node tests/cloud-http-test.js && node tests/cloud-branch-test.js && node tests/cloud-restore-wal-test.js && node tests/cloud-boot-recovery-test.js && node tests/cloud-ladder-test.js && node tests/migration-test.js && node tests/web-delivery-test.js && node tests/csv-safety-test.js && node tests/switch-inventory-test.js && node tests/switch-client-test.js && node tests/web-baseline-guard-test.js && node tests/source-scale-test.js && node tests/source-page-client-test.js && node tests/subscription-pass-test.js && node tests/routing-matrix-test.js && node tests/routing-matrix-client-test.js && node tests/settings-failure-test.js && node tests/inbox-migration-safety-test.js && node tests/schema-guard-test.js && node tests/health-storage-test.js && node tests/readiness-test.js && node tests/settings-atomic-http-test.js && node tests/rate-journal-failure-test.js && node tests/panic-transaction-test.js && node tests/queue-media-atomic-test.js && node tests/sqlite-session-store-test.js && node tests/rate-publication-time-test.js && node tests/rate-before-dispatch-test.js && node tests/queue-decision-atomic-test.js && node tests/heroku-mode-boot-test.js",
+    "test:pg-control": "node tests/saas-control-pg-test.js",
+    "test:saas-password-limits": "node tests/saas-password-limits-test.js",
+    "test:pg-worker": "node tests/worker-experiment-pg-test.js",
+    "test:pg-paddle": "node tests/paddle-experiment-pg-test.js",
+    "test:pg-sqlite-transfer": "node tests/sqlite-transfer-pg-test.js",
+    "test:pg-saas-http": "node tests/saas-http-pg-test.js",
+    "test:worker-runner": "node tests/worker-runner-experiment-test.js",
+    "test:pg-invitations": "node tests/invitations-pg-test.js",
+    "test:pg-objects": "node tests/tenant-objects-pg-test.js",
+    "test:pg-tenant-worker": "node tests/tenant-worker-pg-test.js",
+    "test:pg-atomic-tenant-worker": "node tests/atomic-tenant-worker-pg-test.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "6.7.24",
@@ -23,6 +34,7 @@
     "express-rate-limit": "^7.4.1",
     "express-session": "^1.18.0",
     "nodemailer": "^10.6.0",
+    "pg": "^8.16.3",
     "pino": "^9.4.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",

@@ -124,7 +124,7 @@ function register() {
         AICHAT.add('user', `WA: ${String(text).slice(0, 300)}`);
         AICHAT.add('assistant', reply.slice(0, 2000));                 // mirrored to the assistant
         const sock = wa.getSocket();
-        if (sock) sock.sendMessage(own, { text: reply.slice(0, 3500) });
+        if (sock && !require('./panic').active() && !require('./lifecycle').isStopping()) await sock.sendMessage(own, { text: reply.slice(0, 3500) });
         ring.info('wa.command', `WA command handled: ${norm(text).slice(0, 40)}`);
       } catch (err) {
         ring.warn('wa.command-error', `Command channel error: ${String(err?.message || err).slice(0, 140)}`);

@@ -1,0 +1,34 @@
+'use strict';
+// Destroys the experimental control/tenant schemas. Disposable DB only.
+const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto'),Database=require('better-sqlite3'),{Pool}=require('pg');
+const name=process.env.RAQ_TEST_PG_DATABASE,host=process.env.RAQ_TEST_PG_HOST,port=Number(process.env.RAQ_TEST_PG_PORT),admin=process.env.RAQ_TEST_PG_ADMIN,app=process.env.RAQ_TEST_PG_RUNTIME,tenant=process.env.RAQ_TEST_PG_TENANT;
+if(process.env.RAQ_TEST_PG_ALLOW_DROP!=='1'||!/^raq_test_[a-z0-9_]+$/.test(name||'')||!host?.startsWith('/')||!port||!admin||!/^raq_test_[a-z0-9_]+$/.test(app||'')||!/^raq_test_[a-z0-9_]+$/.test(tenant||'')||tenant===app)throw Error('Refusing test: disposable database, roles, Unix socket and explicit drop permission required');
+const superPool=new Pool({database:name,host,port,user:admin,max:3}),runtime=new Pool({database:name,host,port,user:app,max:2}),tenantPool=new Pool({database:name,host,port,user:tenant,max:2});const {migrate}=require('../src/saas-control/schema'),{control}=require('../src/saas-control'),transfer=require('../src/saas-control/sqlite-snapshot');let n=0;
+const ok=(x,s)=>{assert.ok(x,s);n++;console.log('✓ '+s)};
+(async()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'raq-snapshot-synthetic-'));fs.chmodSync(dir,0o700);let sourceDb;
+ try{
+  await superPool.query('DROP SCHEMA IF EXISTS raq_tenant CASCADE; DROP SCHEMA IF EXISTS raq_control CASCADE');await migrate(superPool);await transfer.install(superPool);await assert.rejects(()=>transfer.install(superPool),/already exist/);ok(true,'installer refuses preexisting snapshot tables');
+  await superPool.query(`GRANT USAGE ON SCHEMA raq_control TO ${app}; GRANT SELECT,INSERT,UPDATE,DELETE ON raq_control.users,raq_control.workspaces,raq_control.memberships,raq_control.sessions,raq_control.login_attempts TO ${app}; GRANT USAGE ON SCHEMA raq_control,raq_tenant TO ${tenant}; GRANT SELECT,INSERT,UPDATE,DELETE ON raq_tenant.workspace_kv,raq_tenant.sqlite_snapshots,raq_tenant.sqlite_snapshot_chunks TO ${tenant}; GRANT EXECUTE ON FUNCTION raq_control.open_context(text,uuid,text),raq_control.active_workspace(),raq_control.can_write(),raq_control.close_context() TO ${tenant}`);
+  const ctl=control(runtime,tenantPool),ownerA=await ctl.createUser('a@snapshot.test','Synthetic-passphrase-aaa'),ownerB=await ctl.createUser('b@snapshot.test','Synthetic-passphrase-bbb'),viewer=await ctl.createUser('v@snapshot.test','Synthetic-passphrase-vvv'),a=await ctl.login(ownerA.email,'Synthetic-passphrase-aaa'),b=await ctl.login(ownerB.email,'Synthetic-passphrase-bbb'),v=await ctl.login(viewer.email,'Synthetic-passphrase-vvv');
+  const wa=await ctl.createWorkspace(a.token,'A'),wb=await ctl.createWorkspace(b.token,'B'),api=transfer.snapshots(ctl),source=path.join(dir,'source.sqlite');
+  sourceDb=new Database(source);sourceDb.pragma('journal_mode=WAL');sourceDb.pragma('foreign_keys=ON');sourceDb.exec('CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT NOT NULL);CREATE TABLE child(id INTEGER PRIMARY KEY,parent_id INTEGER NOT NULL REFERENCES parent(id),payload BLOB NOT NULL);');sourceDb.prepare('INSERT INTO parent(id,name) VALUES(?,?)').run(123,'synthetic parent');const blob=crypto.randomBytes(1200000);sourceDb.prepare('INSERT INTO child(id,parent_id,payload) VALUES(?,?,?)').run(456,123,blob);
+  const snap=await api.importSQLite(a.token,wa.id,source,dir);ok(snap.byteLength>blob.length&&snap.chunkCount>=2,'online SQLite backup transfers bounded chunks');
+  ok(!fs.readdirSync(dir).some(x=>x.startsWith('raq-sqlite-')),'private scratch snapshot and SQLite sidecars are cleaned after successful import');
+  ok((await api.list(a.token,wa.id)).length===1&&(await api.list(b.token,wb.id)).length===0,'snapshot listings isolate workspaces');
+  await assert.rejects(()=>api.restoreSQLite(b.token,wb.id,snap.id,path.join(dir,'wrong.sqlite')),/Snapshot unavailable/);ok(true,'other workspace cannot restore this snapshot');
+  const restore=path.join(dir,'restore.sqlite');const result=await api.restoreSQLite(a.token,wa.id,snap.id,restore);ok(result.sha256===snap.sha256,'restore verifies source SHA-256');
+  const db=new Database(restore,{readonly:true});try{const row=db.prepare('SELECT c.id,c.parent_id,c.payload,p.name FROM child c JOIN parent p ON p.id=c.parent_id').get();ok(row.id===456&&row.parent_id===123&&row.name==='synthetic parent'&&Buffer.compare(row.payload,blob)===0,'restored identifiers, relations and BLOB bytes match');}finally{db.close()}
+  await assert.rejects(()=>api.restoreSQLite(a.token,wa.id,snap.id,restore),e=>e.code==='EEXIST');ok(fs.existsSync(restore),'existing destination is never overwritten');
+  await ctl.setMember(a.token,wa.id,viewer.id,'viewer');await assert.rejects(()=>api.importSQLite(v.token,wa.id,source,dir),/Permission denied/);ok((await api.list(v.token,wa.id)).length===1,'viewer reads snapshots but cannot import');
+  const raw=await tenantPool.query('SELECT count(*)::int AS n FROM raq_tenant.sqlite_snapshots');ok(raw.rows[0].n===0,'no workspace context returns no snapshots');
+  await superPool.query('UPDATE raq_tenant.sqlite_snapshot_chunks SET data=$1 WHERE workspace_id=$2 AND snapshot_id=$3 AND part=0',[Buffer.alloc(1024*1024),wa.id,snap.id]);const corrupt=path.join(dir,'corrupt.sqlite');await assert.rejects(()=>api.restoreSQLite(a.token,wa.id,snap.id,corrupt),/digest mismatch/);ok(!fs.existsSync(corrupt),'corrupt chunk is rejected without publishing a destination');
+  await superPool.query('ALTER TABLE raq_tenant.sqlite_snapshots DISABLE ROW LEVEL SECURITY');await assert.rejects(()=>api.list(a.token,wa.id),/Unsafe snapshot table security/);await superPool.query('ALTER TABLE raq_tenant.sqlite_snapshots ENABLE ROW LEVEL SECURITY');ok(true,'disabled snapshot RLS fails closed');
+  const realRemove=fs.rmSync;let cleanupFailure;
+  try{fs.rmSync=function(p,...args){if(path.basename(String(p)).startsWith('raq-sqlite-'))throw Error('synthetic scratch cleanup failure');return realRemove.call(fs,p,...args)};
+   try{await api.importSQLite(a.token,wa.id,source,dir);assert.fail('cleanup failure must be surfaced')}catch(e){cleanupFailure=e;}
+  }finally{fs.rmSync=realRemove}
+  ok(cleanupFailure?.committedSnapshot?.id && (await api.list(a.token,wa.id)).some(x=>x.id===cleanupFailure.committedSnapshot.id),'cleanup failure reports the committed snapshot for operator reconciliation');
+  for(const name of fs.readdirSync(dir).filter(x=>x.startsWith('raq-sqlite-')))fs.rmSync(path.join(dir,name),{recursive:true,force:true});
+  sourceDb.close();sourceDb=null;console.log('PASS: '+n+' PostgreSQL SQLite image transfer checks');
+ }finally{if(sourceDb)sourceDb.close();await tenantPool.end();await runtime.end();await superPool.end();fs.rmSync(dir,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exitCode=1});

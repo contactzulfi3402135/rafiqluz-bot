@@ -39,7 +39,9 @@ function add({ name, url, events }) {
   if (!n) throw new Error('Name the webhook first.');
   let parsed;
   try { parsed = new URL(u); } catch { throw new Error('Enter a full URL, starting with https://'); }
-  if (!/^https?:$/.test(parsed.protocol)) throw new Error('Only http(s) URLs are allowed.');
+  if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password) throw new Error('Only HTTP(S) URLs without credentials are allowed.');
+  const host=parsed.hostname.replace(/^\[|\]$/g,'');
+  if (require('net').isIP(host) && !require('./safe-image-fetch').publicAddress(host)) throw new Error('Webhook address is private or restricted.');
   const evs = (Array.isArray(events) ? events : String(events || '').split(',')).map((e) => String(e).trim()).filter((e) => KEY.has(e));
   if (!evs.length) throw new Error('Pick at least one event.');
   const r = db.open().prepare('INSERT INTO webhooks(name,url,events) VALUES(?,?,?)').run(n, parsed.href, evs.join(','));
@@ -62,22 +64,21 @@ function _last(id, status) {
 /** Deliver to one webhook with 3 attempts. Never throws. */
 async function deliver(w, event, payload) {
   const body = JSON.stringify({
+    eventId: require('crypto').randomUUID(),
     bot: S.get('bot.name', 'Raqifluz'), event,
     at: new Date().toISOString(),
     payload: payload || {}
   });
   for (let attempt = 1; attempt <= 3; attempt++) {
+    if (require('./lifecycle').isStopping() || (require('./panic').active() && event !== 'panic.on')) { _last(w.id,'paused'); return {ok:false,error:'Webhook paused by panic stop or shutdown.'}; }
     try {
-      const res = await fetch(w.url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-raqifluz-event': event, 'user-agent': 'RaqifluzBot-webhook/1.0' },
-        body,
-        signal: AbortSignal.timeout(10e3)
+      const res = await require('./safe-public-fetch').fetchPublic(w.url, {
+        method:'POST',headers:{'content-type':'application/json','x-raqifluz-event':event,'user-agent':'RaqifluzBot-webhook/1.0'},
+        body,timeoutMs:10000,maxBytes:64*1024,allowEmpty:true,returnStatus:true
       });
-      if (res.ok) { _last(w.id, 'ok ' + res.status); try { AUD.log('webhook', 'webhook.delivered', `Webhook “${w.name}” received ${event} (HTTP ${res.status})`); } catch { } return { ok: true, status: res.status }; }
-      _last(w.id, 'http ' + res.status + ' (attempt ' + attempt + '/3)');
+      _last(w.id, 'ok ' + res.status); try { AUD.log('webhook', 'webhook.delivered', `Webhook “${w.name}” accepted ${event} (HTTP ${res.status})`); } catch { } return {ok:true,status:res.status};
     } catch (err) {
-      _last(w.id, 'error: ' + String(err?.message || err).slice(0, 80));
+      _last(w.id, 'error: ' + String(err?.message || err).replace(/^Feed /,'Webhook ').slice(0,80));
     }
     if (attempt < 3) await new Promise((r) => setTimeout(r, (attempt === 1 ? 2000 : 10000) * _delayScale));
   }
@@ -87,7 +88,7 @@ async function deliver(w, event, payload) {
 
 /** Fire an event to every enabled webhook subscribed to it. Never throws. */
 function fire(event, payload) {
-  if (!KEY.has(event)) return;
+  if (!KEY.has(event) || require('./lifecycle').isStopping() || (require('./panic').active() && event !== 'panic.on')) return;
   try {
     const rows = db.open().prepare('SELECT * FROM webhooks WHERE enabled=1').all();
     for (const w of rows) {

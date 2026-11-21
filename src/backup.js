@@ -171,7 +171,40 @@ function extractSqlite(buf) {
   }
   return buf; // raw .sqlite upload
 }
+// Inspect a backup without attaching it to the live connection or mutating it.
+// Only aggregate table metadata is returned; settings values and credentials stay private.
+function previewFromBuffer(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length > 200 * 1024 * 1024) throw new Error('Invalid or oversized backup.');
+  const data = extractSqlite(buf);
+  if (data.length > 100 * 1024 * 1024 || data.slice(0, 16).toString('latin1') !== 'SQLite format 3\x00') throw new Error('Not a valid SQLite database, or database exceeds 100 MB.');
+  const staged = path.join(path.dirname(require('./config').config.paths.database), `_inspect-${require('crypto').randomBytes(12).toString('hex')}.sqlite`);
+  let inc;
+  try {
+    fs.writeFileSync(staged, data, { mode: 0o600, flag:'wx' });
+    inc = new (require('better-sqlite3'))(staged, { readonly:true, fileMustExist:true });
+    inc.pragma('query_only = ON');
+    inc.pragma('trusted_schema = OFF');
+    if (inc.prepare('PRAGMA integrity_check').get().integrity_check !== 'ok') throw new Error('Backup integrity check failed. Nothing was changed.');
+    const incoming = new Set(inc.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r=>r.name));
+    for (const t of ['settings','posts']) if (!incoming.has(t)) throw new Error('Not a Raqifluz bot database (missing table: ' + t + ').');
+    const live = db.open();
+    const quote = x => '"'+String(x).replace(/"/g,'""')+'"';
+    const liveTables = live.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' AND name NOT LIKE '%_data' AND name NOT LIKE '%_idx' AND name NOT LIKE '%_content' AND name NOT LIKE '%_docsize'").all().map(r=>r.name);
+    const tables = liveTables.map(name=>{
+      const exists=incoming.has(name);
+      const current=live.prepare(`SELECT COUNT(*) AS n FROM ${quote(name)}`).get().n;
+      if (!exists) return { name, action:'preserve', current, incoming:null, missingColumns:[] };
+      const columns=live.prepare(`PRAGMA table_info(${quote(name)})`).all().map(c=>c.name);
+      const inColumns=new Set(inc.prepare(`PRAGMA table_info(${quote(name)})`).all().map(c=>c.name));
+      const missingColumns=columns.filter(c=>!inColumns.has(c));
+      if (!columns.some(c=>inColumns.has(c))) throw new Error('No compatible columns in table: ' + name);
+      return { name, action:'replace', current, incoming:inc.prepare(`SELECT COUNT(*) AS n FROM ${quote(name)}`).get().n, missingColumns };
+    });
+    return { sha256:require('crypto').createHash('sha256').update(buf).digest('hex'), databaseBytes:data.length, tables };
+  } finally { if (inc) inc.close(); try { fs.unlinkSync(staged); } catch {} }
+}
 function restoreFromBuffer(buf) {
+  if (!require('./panic').active() || require('./lifecycle').isStopping()) throw Error('Engage panic stop before restoring the database. In-flight work cannot be recalled; offline recovery is safer.');
   const data = extractSqlite(buf);
   if (data.slice(0, 15).toString('latin1') !== 'SQLite format 3') throw new Error('Not a SQLite database.');
   const staged = path.join(path.dirname(require('./config').config.paths.database), `_restore-${require('crypto').randomBytes(12).toString('hex')}.sqlite`);
@@ -202,6 +235,15 @@ function restoreFromBuffer(buf) {
           if (!cols.length) throw new Error('No compatible columns in table: ' + t);
           d.exec(`DELETE FROM ${quote(t)}; INSERT INTO ${quote(t)} (${cols.join(',')}) SELECT ${cols.join(',')} FROM src.${quote(t)};`);
         }
+        // Restored settings can contain panic=off and waiting jobs. Keep the
+        // installation stopped atomically, even if the uploaded snapshot was
+        // created while automation was running. Clearing panic later retains
+        // manual mirroring pause until the owner explicitly resumes it.
+        const oldPause=d.prepare("SELECT value FROM settings WHERE key='mirror.paused'").get()?.value || '0';
+        const save=d.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value');
+        save.run('restore.previous_mirror_paused',oldPause);
+        save.run('panic.state',JSON.stringify({mirrorPaused:true,at:Date.now(),by:'database-restore-safety'}));
+        save.run('panic.on','1');save.run('mirror.paused','1');
         // INSERT updates live AUTOINCREMENT sequences; untouched newer tables keep theirs.
         for (const f of ['posts_fts', 'logs_fts', 'inbox_fts']) { try { d.exec(`INSERT INTO [${f}]([${f}]) VALUES('rebuild')`); } catch { } }
       });
@@ -215,4 +257,4 @@ function restoreFromBuffer(buf) {
   }
 }
 
-module.exports = { downloadZip, restoreFromBuffer, preRestoreSnapshot, listPreRestore, BACKUP_DIR, buildZip, readZip };
+module.exports = { downloadZip, previewFromBuffer, restoreFromBuffer, preRestoreSnapshot, listPreRestore, BACKUP_DIR, buildZip, readZip };

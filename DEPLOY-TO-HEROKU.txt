@@ -1,0 +1,28 @@
+RAQIFLUZ — COPY-INTO-REPO PACKAGE (WORK IN PROGRESS)
+
+This ZIP is laid out with the files at its root so you can copy them into the root of your existing local repository. It is NOT the completed SaaS upgrade and is NOT verified for your live Heroku deployment. It contains the current single-owner bot and unconnected experimental SaaS code. Do not sell or expose this as multi-tenant software.
+
+IMPORTANT BEFORE COPYING OR DEPLOYING
+- A commit to your auto-deploy branch can start a real deployment and provider activity. Prefer testing on a separate staging app and branch first.
+- Pause the live bot's automation, allow active operations to finish, and make an independently verified backup that includes the database, SQLite sidecars, linked-device sessions and required media. Check cloud backup and restore separately; a database export alone is not a complete backup.
+- Keep your current source commit and existing configuration. Do not change or remove .env, Heroku Config Vars, the database, session directories, media, backups or the cloud state branch. This ZIP deliberately excludes those items and does not contain node_modules or .git.
+- Heroku's filesystem is ephemeral. Restart/deploy can lose SQLite state, sessions or media. A periodic cloud snapshot is not a transactional database and cannot guarantee recovery or prevent duplicates. Run only one web dyno; this project is not distributed. No live Heroku/GitHub/WhatsApp upgrade or restore has been verified by the included tests.
+
+COPY AND REVIEW
+1. In your local repository, make sure your existing work is backed up and you can return to its current commit. Do not delete your repository.
+2. Extract the ZIP to a separate temporary folder. Copy the contents of that folder into your repository root and merge folders, replacing files with the same names. Do NOT copy a surrounding folder into the repo. This is an overlay; it does not delete old files that are absent from the ZIP.
+3. Keep the existing .gitignore and check that your secrets, state files and backups are ignored. This package does not overwrite .gitignore or .env. Review every added and changed file with git status and git diff. Do not commit secrets or your existing runtime state.
+4. With Node 24, run npm ci and npm test in a safe test copy. npm ci replaces that copy's node_modules. The tests use mocks; PostgreSQL prototype tests are separate and destructive to their named test schemas, so never run them on a real/shared database.
+5. Confirm the repository contains the complete src directory, including src/web-integrity.json, together with package.json, package-lock.json and Procfile from this package. Do not mix dashboard files and the integrity manifest from different versions.
+
+HEROKU CONFIGURATION
+- Keep your existing Config Vars and state settings. Verify DASHBOARD_USERNAME, DASHBOARD_PASSWORD, SESSION_SECRET and any existing cloud snapshot settings; never paste secrets into commits or chat.
+- Heroku supplies PORT. RAQ_LISTEN_HOST should be unset or set to 0.0.0.0 for Heroku. Do not copy the local-only 127.0.0.1 bind setting from the local guide into Heroku.
+- This package targets the Heroku Node buildpack and Node 24 via package.json. Container deployments need separate review.
+- Never run two dynos or a staging copy against the same WhatsApp session/state. Keep public pairing disabled unless you have deliberately secured it.
+
+DEPLOY AND CHECK
+Test the update on an isolated staging app with synthetic state and a controlled test account first. After reviewing the diff, commit and push using your normal workflow. On the staging deployment check build/startup logs, /healthz, login, settings, queue and linked-device status. Provider acknowledgement is not proof of delivery. Test backup/restore before relying on it. Only consider updating the live auto-deploy branch after these checks and an independent review. If startup or restore fails, stop and investigate without deleting or resetting the state branch or session files. Keep a rollback plan and your verified backups.
+
+CURRENT TEST EVIDENCE
+The application passed synthetic tests with mock providers, and the included deployment test simulates Heroku process settings locally. The actual Heroku deployment, your live repository, cloud snapshot, WhatsApp account and production recovery have not been tested. This ZIP is not a completed SaaS release.

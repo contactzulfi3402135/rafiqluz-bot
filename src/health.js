@@ -4,6 +4,7 @@
  *  pipeline, credentials or bot state — it only reads and writes its own
  *  selftests history table. */
 const fs = require('fs');
+const path = require('path');
 const cfg = require('./config');
 const { ring } = require('./logger');
 const { S, A, open, ST, NTF, F } = require('./db');
@@ -12,7 +13,15 @@ const persist = require('./persist');
 const ai = require('./ai');
 const power = require('./power');
 
-function dbBytes() { try { return fs.statSync(cfg.config.paths.database).size; } catch { return 0; } }
+function dbBytes() { try { return fs.statSync(cfg.config.paths.database).size; } catch { return null; } }
+function availableDisk() {
+  try {
+    const stat=fs.statfsSync(path.dirname(cfg.config.paths.database));
+    const free=Number(stat.bavail)*Number(stat.bsize),total=Number(stat.blocks)*Number(stat.bsize);
+    if(!Number.isFinite(free)||!Number.isFinite(total)||free<0||total<=0)return null;
+    return {free,total};
+  } catch { return null; }
+}
 
 /* Each part scores 0–100; the headline score is the plain average so the
    two weakest parts are always the ones dragging the number down. */
@@ -38,8 +47,8 @@ function score() {
   const ps = persist.publicStatus();
   parts.push({
     id: 'cloud', name: 'Cloud memory',
-    score: !ps.enabled ? 15 : ps.lastError ? 55 : 100,
-    note: !ps.enabled ? 'OFF — every deploy asks for a QR scan' : (ps.lastError ? `last sync error: ${String(ps.lastError).slice(0, 60)}` : `synced ${ps.lastKB} KB ${ps.lastSyncAt ? '· ' + ps.lastSyncAt : ''}`)
+    score: !ps.enabled ? 50 : ps.writeBlocked ? 30 : ps.lastError ? 55 : ps.lastSyncAt ? 100 : 50,
+    note: !ps.enabled ? 'OFF — verify persistent storage and independent backups' : (ps.writeBlocked ? 'ON — cloud writes blocked; inspect recovery status' : ps.lastError ? `last sync error: ${String(ps.lastError).slice(0, 60)}` : ps.lastSyncAt ? `last sync ${ps.lastKB} KB · ${ps.lastSyncAt}` : 'ON — no confirmed sync reported yet')
   });
 
   const since = new Date(Date.now() - 7 * 86400e3).toISOString().slice(0, 19).replace('T', ' ');
@@ -58,13 +67,13 @@ function score() {
     note: ai.usable() ? `${ai.providerOf()} · key saved` : 'no usable key — AI features degrade gracefully'
   });
 
-  const mb = dbBytes() / 1048576;
-  const dyno = 200; // MB working-memory budget (R6: 200 MB dyno)
-  const storageScore = mb < 50 ? 100 : mb < 100 ? 80 : mb < 150 ? 55 : mb < dyno ? 30 : 5;
+  const bytes = dbBytes(), mb = bytes == null ? null : bytes / 1048576, disk = availableDisk();
+  const freeMb = disk ? disk.free / 1048576 : null;
+  const storageScore = freeMb == null ? 50 : freeMb < 100 ? 5 : freeMb < 512 ? 30 : freeMb < 1024 ? 55 : 100;
   parts.push({
     id: 'storage', name: 'Storage',
     score: storageScore,
-    note: `state DB ${mb.toFixed(1)} MB (dyno budget ~${dyno} MB)`
+    note: (mb == null ? 'state DB size unknown' : `state DB ${mb.toFixed(1)} MB`) + ' · ' + (freeMb == null ? 'filesystem free space unknown' : `${freeMb.toFixed(0)} MB filesystem free`)
   });
 
   const email = require('./email');
@@ -135,7 +144,7 @@ function selfTest() {
   });
   add('Cloud memory state', () => {
     const ps = persist.publicStatus();
-    return ps.enabled ? (ps.lastError ? `ON but last error: ${String(ps.lastError).slice(0, 60)}` : 'ON, last sync clean') : 'OFF (deploy = QR re-scan risk)';
+    return ps.enabled ? (ps.lastError ? `ON but last error: ${String(ps.lastError).slice(0, 60)}` : 'ON, last sync clean') : 'OFF (verify persistent storage and independent backups)';
   });
   add('AI key usable', () => {
     if (ai.usable()) return `${ai.providerOf()} configured`;
@@ -146,10 +155,12 @@ function selfTest() {
     if (phone) return `+${phone}`;
     throw new Error('no report phone (daily/weekly reports cannot be sent)');
   });
-  add('Storage within budget', () => {
-    const mb = dbBytes() / 1048576;
-    if (mb > 150) throw new Error(`${mb.toFixed(1)} MB — approaching the 200 MB dyno budget`);
-    return `${mb.toFixed(1)} MB`;
+  add('Filesystem free space', () => {
+    const disk = availableDisk();
+    if (!disk) throw new Error('filesystem free space unavailable');
+    const freeMb = disk.free / 1048576;
+    if (freeMb < 100) throw new Error(`${freeMb.toFixed(0)} MB free — less than 100 MB`);
+    return `${freeMb.toFixed(0)} MB free (does not verify storage durability or backup capacity)`;
   });
   add('Settings readable', () => {
     const v = S.get('bot.name', '');
@@ -165,4 +176,4 @@ function selfTest() {
   return { ok, total: checks.length, ms: Date.now() - t0, list: checks };
 }
 
-module.exports = { score, selfTest, dbBytes };
+module.exports = { score, selfTest, dbBytes, availableDisk };

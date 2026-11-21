@@ -26,7 +26,8 @@ function storeMedia(id, buf, kind) {
     fs.mkdirSync(HOLD_DIR, { recursive: true });
     const ext = kind === 'video' ? '.mp4' : kind === 'document' ? '.bin' : '.jpg';
     const p = path.join(HOLD_DIR, `${id}${ext}`);
-    fs.writeFileSync(p, buf);
+    // Never overwrite a retained or orphaned attachment with a reused row ID.
+    fs.writeFileSync(p, buf, { flag: 'wx', mode: 0o600 });
     return p;
   } catch (e) { ring.warn('queue.media.fail', `Could not hold media for queue item ${id}: ${e.message}`); return ''; }
 }
@@ -34,20 +35,8 @@ function localMediaPath(p) { const name = path.basename(String(p || '')); return
 function readMedia(p) { try { const f=localMediaPath(p); return f && fs.existsSync(f) ? fs.readFileSync(f) : null; } catch { return null; } }
 function delMedia(p) { try { const f=localMediaPath(p); if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch { } }
 
-/* cleanup: held media for settled items older than 7 days */
-function pruneHold() {
-  try {
-    fs.mkdirSync(HOLD_DIR, { recursive: true });
-    const now = Date.now();
-    for (const f of fs.readdirSync(HOLD_DIR)) {
-      const st = fs.statSync(path.join(HOLD_DIR, f));
-      const full = path.join(HOLD_DIR, f);
-      const itemId = Number(f.split('.')[0]);
-      const ref = require('./db').open().prepare("SELECT 1 FROM approvals WHERE id=? AND status NOT IN ('published','rejected') LIMIT 1").get(itemId);
-      if (!ref && now - st.mtimeMs > 7 * 86400e3) fs.unlinkSync(full);
-    }
-  } catch { }
-}
+/* Retain held media until the owner explicitly performs Storage cleanup. */
+function pruneHold() { return 0; }
 
 /** Queue one post (called by the pipeline instead of publishing directly).
     targetJids = the EXACT target set the pipeline computed (mapping + routing +
@@ -55,14 +44,23 @@ function pruneHold() {
 function enqueue({ sourceJid, sourceMsgId, text, mediaBuf, mediaKind, mediaMime, msgTs = 0, targetJids = [], requireApproval = false }) {
   const delayMin = Math.max(0, Math.min(1440, parseInt(S.get('queue.delay.min', '0'), 10) || 0));
   const holdUntil = !requireApproval && delayMin > 0 ? new Date(Date.now() + delayMin * 60000).toISOString() : '';
-  const id = Q.add({ source_jid: sourceJid, source_msg_id: sourceMsgId, text, media_kind: mediaKind || '', hold_until: holdUntil, msg_ts: msgTs || 0, targets: (targetJids || []).join(',') });
-  if (!id) throw new Error('queue insert failed');
-  const p = mediaBuf ? storeMedia(id, mediaBuf, mediaKind) : '';
-  if (mediaBuf && !p) { require('./db').open().prepare('DELETE FROM approvals WHERE id=?').run(id); throw new Error('Could not store queued media; no post was sent.'); }
-  try { require('./db').open().prepare('UPDATE approvals SET media_path=? WHERE id=?').run(p, id); } catch { }
-  P.mark(sourceJid, sourceMsgId, 'queued', 'waiting in approval queue', String(text || '').slice(0, 60000));
-  const pid = P.postId(sourceJid, sourceMsgId);
-  if (pid) { try { require('./db').open().prepare("UPDATE posts SET queued_at=datetime('now') WHERE id=?").run(pid); } catch { } }
+  const d = require('./db').open(); let stagedPath = '';
+  // The file system and SQLite cannot be committed atomically. If a later DB
+  // step fails, retain the attachment as an orphan for manual recovery rather
+  // than overwriting/deleting it; the queue and post rows roll back together.
+  const id = d.transaction(() => {
+    const queuedId = Q.add({ source_jid: sourceJid, source_msg_id: sourceMsgId, text, media_kind: mediaKind || '', hold_until: holdUntil, msg_ts: msgTs || 0, targets: (targetJids || []).join(',') });
+    if (!queuedId) throw new Error('Queue insert failed; no post was sent.');
+    stagedPath = mediaBuf ? storeMedia(queuedId, mediaBuf, mediaKind) : '';
+    if (mediaBuf && !stagedPath) throw new Error('Could not store queued media; no post was sent. An existing attachment was not overwritten.');
+    const associated = d.prepare('UPDATE approvals SET media_path=? WHERE id=?').run(stagedPath, queuedId);
+    if (associated.changes !== 1) throw new Error('Could not associate queued media; no post was sent.');
+    P.mark(sourceJid, sourceMsgId, 'queued', 'waiting in approval queue', String(text || '').slice(0, 60000));
+    const pid = P.postId(sourceJid, sourceMsgId);
+    if (!pid) throw new Error('Could not record queued post; no post was sent.');
+    d.prepare("UPDATE posts SET queued_at=datetime('now') WHERE id=?").run(pid);
+    return queuedId;
+  })();
   AUD.log('pipeline', 'post.queued', `Post from ${sourceJid} entered the queue (${delayMin ? `hold ${delayMin} min` : 'approve first'})`);
   ring.info('post.queued', `Post held in the approval queue (${String(text || '').slice(0, 60)}${String(text || '').length > 60 ? '…' : ''})`);
   tick().catch(() => { }); // a zero-delay buffer publishes on the next pass anyway
@@ -111,10 +109,10 @@ async function release(id) {
       }
       AUD.log('queue', 'post.published', `Queue item ${id} published (${res.sent} targets, ${Math.round(ms / 1000)}s)`);
       ring.info('queue.published', `Approval queue: post published to ${res.sent} target(s)`);
-      delMedia(row.media_path);
+      if (S.getBool('inbox.deletePublishedMedia',false)) delMedia(row.media_path);
       /* v9.0.0 (owner policy): also delete the inbox copy of the source post's
          media — the media is in the target channel now, nothing kept locally. */
-      if (hasMedia) { try { require('./db').IB.clearMediaForMsg('main', row.source_jid, row.source_msg_id); ring.info('queue.media.cleaned', `Post media deleted right after publishing (${row.media_kind}) — it lives in the target channel now`); } catch { } }
+      if (hasMedia && S.getBool('inbox.deletePublishedMedia',false)) { try { require('./db').IB.clearMediaForMsg('main', row.source_jid, row.source_msg_id); ring.info('queue.media.cleaned', `Post media deleted right after publishing (${row.media_kind}) — it lives in the target channel now`); } catch { } }
     } else {
       Q.setStatus(id, 'failed', (res.errors || []).join(' | ').slice(0, 200));
       const pid = P.postId(row.source_jid, row.source_msg_id);
@@ -145,7 +143,7 @@ async function tick() {
       const extra = Math.max(0, require('./pace').gapMin(1500) - 1500); // 5E (R74): adaptive backoff between items
       if (extra) await new Promise((r) => setTimeout(r, extra));
     }
-    Q.trimOld(7);
+    // Resolved approvals remain available as history; cleanup must be explicit.
   } finally { ticking = false; }
 }
 function start() {
@@ -162,14 +160,69 @@ function start() {
   setInterval(() => { tick().catch(() => { }); pruneHold(); }, 15000).unref?.(); }
 
 /* ---------- owner actions ---------- */
-function pendingCount() { try { return Q.pending(500).filter((q) => q.status === 'pending').length; } catch { return 0; } }
-function editText(id, text) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); Q.edit(id, String(text || '').slice(0, 20000)); }
-
-function approve(id, note) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); if (r.status !== 'pending') throw new Error('Item already decided.'); Q.setStatus(id, 'approved', note || 'approved by owner'); AUD.log('owner', 'queue.approve', `Approved queue item ${id} (${String(r.text || '').slice(0, 60)})`); ring.info('queue.approve', `Approved: ${String(r.text || '').slice(0, 50)}`); tick().catch(() => { }); return Q.one(id); }
-function reject(id, note) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); if (r.status !== 'pending') throw new Error('Item already decided.'); Q.setStatus(id, 'rejected', note || 'rejected by owner'); AUD.log('owner', 'queue.reject', `Rejected queue item ${id}`); delMedia(r.media_path); const pid = P.postId(r.source_jid, r.source_msg_id); if (pid) P.setStatus(pid, 'skipped', 'rejected in approval queue'); return Q.one(id); }
-function approveAll() { let n = 0; for (const r of Q.pending(200)) { try { if (r.status === 'pending') { Q.setStatus(r.id, 'approved', 'approved all by owner'); n += 1; } } catch { } } if (n) AUD.log('owner', 'queue.approve-all', `Approved ${n} queued posts`); tick().catch(() => { }); return n; }
-function dismiss(id) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); Q.setStatus(id, 'failed', 'dismissed by owner'); const pid = P.postId(r.source_jid, r.source_msg_id); if (pid) { try { require('./db').open().prepare('UPDATE posts SET dismissed=1 WHERE id=?').run(pid); } catch { } } AUD.log('owner', 'queue.dismiss', `Dismissed queue item ${id}`); return Q.one(id); }
-function retry(id) { const r = Q.one(id); if (!r) throw new Error('Item not found.'); if (r.status !== 'failed') throw new Error('Only failed items can be retried.'); if (require('./delivery-ledger').hasLegacyCopies(r.source_jid,r.source_msg_id)) throw new Error('Older recorded copies need manual checking; retry is disabled to avoid duplicates.'); if (require('./delivery-ledger').hasUnresolved(r.source_jid,r.source_msg_id)) throw new Error('Review uncertain deliveries first to avoid duplicates.'); require('./db').open().prepare("UPDATE approvals SET status='approved', hold_until='', note='' WHERE id=?").run(id); AUD.log('owner', 'queue.retry', `Retried queue item ${id}`); tick().catch(() => { }); return Q.one(id); }
+function pendingCount() { return require('./db').open().prepare("SELECT COUNT(*) AS n FROM approvals WHERE status='pending'").get().n; }
+function editText(id, text) {
+  const d = require('./db').open();
+  const changed = d.prepare("UPDATE approvals SET text=? WHERE id=? AND status='pending'").run(String(text || '').slice(0, 20000), Number(id));
+  if (!changed.changes) throw new Error('Item not found or already decided.');
+}
+function approve(id, note) {
+  const d = require('./db').open(), r = Q.one(id);
+  if (!r) throw new Error('Item not found.');
+  const changed = d.prepare("UPDATE approvals SET status='approved',note=?,decided_at=datetime('now') WHERE id=? AND status='pending'").run(String(note || 'approved by owner').slice(0,300),Number(id));
+  if (!changed.changes) throw new Error('Item already decided.');
+  AUD.log('owner','queue.approve',`Approved queue item ${id} (${String(r.text || '').slice(0,60)})`);
+  ring.info('queue.approve',`Approved: ${String(r.text || '').slice(0,50)}`);tick().catch(() => {});return Q.one(id);
+}
+function approveEdited(id, text, note) {
+  const value=String(text || '').slice(0,20000);if(!value.trim())throw new Error('Text is required.');
+  const d=require('./db').open();
+  // A single conditional write prevents another approval or pump from sending
+  // the old text between the edit and approval steps.
+  const changed=d.prepare("UPDATE approvals SET text=?,status='approved',note=?,decided_at=datetime('now') WHERE id=? AND status='pending'").run(value,String(note || 'edited + approved').slice(0,300),Number(id));
+  if(!changed.changes)throw new Error('Item not found or already decided.');
+  AUD.log('owner','queue.approve',`Edited and approved queue item ${id}`);tick().catch(()=>{});return Q.one(id);
+}
+function reject(id, note) {
+  const d=require('./db').open();
+  const row=d.transaction(()=>{
+    const r=Q.one(id);if(!r)throw new Error('Item not found.');
+    const changed=d.prepare("UPDATE approvals SET status='rejected',note=?,decided_at=datetime('now') WHERE id=? AND status='pending'").run(String(note || 'rejected by owner').slice(0,300),Number(id));
+    if(!changed.changes)throw new Error('Item already decided.');
+    d.prepare("UPDATE posts SET status='skipped',reason='rejected in approval queue' WHERE source_jid=? AND source_msg_id=? AND status='queued'").run(r.source_jid,r.source_msg_id);
+    return r;
+  }).immediate();
+  AUD.log('owner','queue.reject',`Rejected queue item ${id}`);return Q.one(row.id);
+}
+function approveAll() {
+  const d=require('./db').open();
+  const n=d.transaction(()=>{
+    const rows=Q.pending(200),change=d.prepare("UPDATE approvals SET status='approved',note='approved all by owner',decided_at=datetime('now') WHERE id=? AND status='pending'");
+    let count=0;for(const row of rows)if(row.status==='pending')count+=change.run(row.id).changes;return count;
+  }).immediate();
+  if(n)AUD.log('owner','queue.approve-all',`Approved ${n} queued posts`);tick().catch(()=>{});return n;
+}
+function dismiss(id) {
+  const d=require('./db').open();
+  d.transaction(()=>{
+    const r=Q.one(id);if(!r)throw new Error('Item not found.');
+    const changed=d.prepare("UPDATE approvals SET note='dismissed by owner' WHERE id=? AND status='failed'").run(Number(id));
+    if(!changed.changes)throw new Error('Only failed items can be dismissed.');
+    d.prepare("UPDATE posts SET dismissed=1 WHERE source_jid=? AND source_msg_id=? AND status='failed'").run(r.source_jid,r.source_msg_id);
+  }).immediate();
+  AUD.log('owner','queue.dismiss',`Dismissed queue item ${id}`);return Q.one(id);
+}
+function retry(id) {
+  const d=require('./db').open();
+  d.transaction(()=>{
+    const r=Q.one(id);if(!r)throw new Error('Item not found.');if(r.status!=='failed')throw new Error('Only failed items can be retried.');
+    if(require('./delivery-ledger').hasLegacyCopies(r.source_jid,r.source_msg_id))throw new Error('Older recorded copies need manual checking; retry is disabled to avoid duplicates.');
+    if(require('./delivery-ledger').hasUnresolved(r.source_jid,r.source_msg_id))throw new Error('Review uncertain deliveries first to avoid duplicates.');
+    const changed=d.prepare("UPDATE approvals SET status='approved',hold_until='',note='' WHERE id=? AND status='failed'").run(Number(id));
+    if(!changed.changes)throw new Error('Item changed before retry.');
+  }).immediate();
+  AUD.log('owner','queue.retry',`Retried queue item ${id}`);tick().catch(()=>{});return Q.one(id);
+}
 
 /* ---------- R43: Live Queue view data ---------- */
 function liveView() {
@@ -197,18 +250,11 @@ function liveView() {
 
 /* ---------- R43/R47/R53: retry failed posts (re-feed through the real pipeline) ---------- */
 async function refeedOne(f) {
-  if (String(f.source_jid).startsWith('system:') || String(f.source_jid).endsWith('@bot')) throw new Error('This is not a source-channel post; inspect the destination and deliberately compose again if needed.');
-  if (require('./delivery-ledger').hasLegacyCopies(f.source_jid,f.source_msg_id)) throw new Error('Older recorded copies need manual checking; retry is disabled to avoid duplicates.');
-  if (require('./delivery-ledger').hasUnresolved(f.source_jid,f.source_msg_id)) throw new Error('Review uncertain deliveries first to avoid duplicates.');
-  const sock = wa.getSocket();
-  if (!sock || wa.getStatus().status !== 'open') throw new Error('WhatsApp is not connected — the post stays in the queue and will be retried on reconnect.');
-  const posts = await wa.fetchChannelPosts(sock, f.source_jid, 50).catch(() => []);
-  const found = (posts || []).find((x) => x?.key?.id === f.source_msg_id);
-  if (!found) throw new Error('The original post is no longer on the source channel (deleted, or older than the 50-post fetch range) — cannot re-feed it.');
-  const d = require('./db').open();
-  d.prepare("DELETE FROM posts WHERE id=?").run(f.id); // clear the seen-mark; re-intake re-records it
-  await require('./pipeline').intake(found);
-  return true;
+  // The old path deleted the only failed-post record before an asynchronous
+  // intake. A crash or rejected intake permanently lost that history and could
+  // repeat external effects. Without a durable retry journal it is unsafe.
+  // Failed posts with an existing queue item can still use retry() above.
+  throw new Error('Re-feeding a failed post without a queue item is disabled to preserve its history. Review delivery records and recreate it deliberately if appropriate.');
 }
 async function retryOneFailed(postId) {
   const f = require('./db').open().prepare("SELECT id, source_jid, source_msg_id FROM posts WHERE id=? AND status='failed'").get(Number(postId));
@@ -265,7 +311,7 @@ async function republishOne(postId, newText) {
 function recordRecovery(summary) {
   const s = { ...summary, at: new Date().toISOString() };
   S.set('recovery.last', JSON.stringify(s));
-  ring.info('recovery.pass', `Boot recovery pass: ${s.recovered || 0} post(s) recovered, ${s.failed || 0} failed, ${s.skipped || 0} skipped`);
+  ring.info('recovery.pass', `Recovery submitted ${s.fed || 0} candidate post(s); outcomes are not attributed to this pass. Check history.`);
   return s;
 }
 
@@ -282,10 +328,12 @@ async function undoLast(targetJid) {
   const sock = wa.getSocket();
   if (!sock || wa.getStatus().status !== 'open') throw new Error('WhatsApp is not connected — cannot undo.');
   await wa.deleteChannelPost(sock, targetJid, row.msg_id);
-  d.prepare("UPDATE post_keys SET msg_id='undone' WHERE post_id=? AND target_jid=?").run(row.post_id, targetJid);
-  AUD.log('owner', 'post.undo', `Deleted the last published post on ${targetJid} (source ${row.source_jid}, msg ${row.source_msg_id})`);
-  ring.info('post.undo', `Undo: last post deleted from ${targetJid}`);
-  return { ok: true, postId: row.post_id };
+  // Provider acknowledgement is not proof of deletion. Retain the original
+  // message ID so that the owner can inspect/reconcile it rather than losing
+  // the only reference to a potentially still-visible post.
+  AUD.log('owner', 'post.undo', `Deletion request accepted on ${targetJid} (source ${row.source_jid}, msg ${row.source_msg_id}); verify on channel`);
+  ring.info('post.undo', `Deletion request accepted for ${targetJid}; verify on channel`);
+  return { ok: true, postId: row.post_id, verified: false, note: 'Deletion request accepted; check the channel to verify.' };
 }
 
 /** 5I (I10): the resend rate guard — checked BEFORE anything is sent.
@@ -324,4 +372,4 @@ async function undoPostOn(postId, targetJid) {
   return undoLast(targetJid);
 }
 
-module.exports = { enqueue, release, tick, start, approve, reject, approveAll, dismiss, retry, liveView, pendingCount, editText, retryOneFailed, retryAllFailed, republishOne, recordRecovery, undoLast, undoPostOn, checkResendGuard, pruneHold };
+module.exports = { enqueue, release, tick, start, approve, reject, approveAll, dismiss, retry, liveView, pendingCount, editText, approveEdited, retryOneFailed, retryAllFailed, republishOne, recordRecovery, undoLast, undoPostOn, checkResendGuard, pruneHold };

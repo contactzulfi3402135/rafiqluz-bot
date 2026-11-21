@@ -17,9 +17,10 @@ async function subscribe(jid) {
   const sock = wa.getSocket();
   if (!sock) return false;
   const res = await wa.subscribeChannel(sock, jid);
+  if (wa.getSocket() !== sock || wa.getStatus().status !== 'open') return false;
   if (res && res.duration) {
     // WhatsApp expires live-push subscriptions — re-arm BEFORE that moment
-    // (75% of the lifetime, capped at 15 min so it can never silently die)
+    // (75% of the lifetime, capped at 15 min; large source sets can take longer)
     const refreshMs = Math.min(Math.max(res.duration * 750, 60 * 1000), 15 * 60 * 1000);
     subOkUntil.set(jid, Date.now() + refreshMs);
     return true;
@@ -27,52 +28,72 @@ async function subscribe(jid) {
   const now = Date.now();
   if (!subMissingAt.get(jid) || now - subMissingAt.get(jid) > 3600e3) {
     subMissingAt.set(jid, now);
-    ring.warn('channel.subscribe.missing', `WhatsApp did not confirm live updates for ${jid} — the channel was deleted, this account no longer follows it, or WhatsApp is busy. Posts still arrive via the fast safety-net check (every ${Math.max(15, Number(process.env.SOURCE_PULL_SEC) || 30)} s).`);
+    ring.warn('channel.subscribe.missing', `WhatsApp did not confirm live updates for ${jid} — the channel was deleted, this account no longer follows it, or WhatsApp is busy. The pull safety-net is best-effort and can miss posts, especially with many sources.`);
   }
   return false;
 }
 
-async function subscribeAll(paceMs) {
-  const sources = CH.listActiveSources();
-  let first = true;
-  for (const s of sources) {
-    if (!first) await new Promise((r) => setTimeout(r, paceMs));
-    first = false;
-    await subscribe(s.jid);
-  }
-  if (sources.length) ring.info('channel.subscribed', `Live subscriptions refreshed for ${sources.length} source(s)`);
+// One subscription pass at a time: at thousands of sources a pass lasts
+// far longer than the 60-second timer. Overlapping passes cause a request storm.
+let subscriptionPassBusy=false;
+async function runSubscriptionPass({onlyDue=false,paceMs=2000,wait=(ms)=>new Promise(r=>setTimeout(r,ms))}={}) {
+  if(subscriptionPassBusy)return {busy:true,attempted:0,confirmed:0,aborted:false};
+  const sock=wa.getSocket();if(!sock || wa.getStatus().status!=='open')return {busy:false,attempted:0,confirmed:0,aborted:true};
+  subscriptionPassBusy=true;let attempted=0,confirmed=0,aborted=false;
+  try {
+    for(const s of CH.listActiveSources()) {
+      if(s.kind && s.kind!=='wa')continue;
+      if(onlyDue && (subOkUntil.get(s.jid)||0)>=Date.now()+30000)continue;
+      if(attempted)await wait(paceMs);
+      if(wa.getSocket()!==sock || wa.getStatus().status!=='open'){aborted=true;break;}
+      if(!CH.hasActiveSource(s.jid))continue;
+      attempted++;if(await subscribe(s.jid))confirmed++;
+    }
+    if(attempted)ring.info('channel.subscribed',`Live subscription pass attempted ${attempted}; ${confirmed} confirmed${aborted?' before disconnection':''}. Confirmation does not guarantee delivery.`);
+    return {busy:false,attempted,confirmed,aborted};
+  } finally {subscriptionPassBusy=false;}
 }
+async function subscribeAll(paceMs) {return runSubscriptionPass({paceMs});}
 
 /* ---------------- PULL SAFETY-NET ---------------- */
 /** v7.3.7: cap a promise so a hung socket query can never wedge the pull poll. */
-const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('pull timeout ' + ms + 'ms')), ms))]);
+const withTimeout = (p, ms) => {
+  let timer;
+  return Promise.race([p,new Promise((_,rej)=>{timer=setTimeout(()=>rej(new Error('provider read timeout '+ms+'ms')),ms);timer.unref?.();})]).finally(()=>clearTimeout(timer));
+};
 function startPullPoll() {
   const sec = Math.max(15, Number(process.env.SOURCE_PULL_SEC) || 30);
   let pullBusy = false; // never stack cycles — a slow source must not pile up queries
-  let failStreak = 0;      // v7.3.7: consecutive cycles where ALL fetches failed = zombie socket
+  let failStreak = 0;      // consecutive full-failure cycles on this socket
+  let lastPullSocket = null;
   let lastHeartbeat = 0;   // v7.3.7: hourly pipeline heartbeat for the logs
   setInterval(async () => {
     const sock = wa.getSocket();
     if (!sock || wa.getStatus().status !== 'open' || pullBusy) return;
+    if (sock !== lastPullSocket) { failStreak=0;lastPullSocket=sock; }
     pullBusy = true;
     let fetchOk = 0, fetchFail = 0;
     try {
       for (const src of CH.listActiveSources()) {
+        if (src.kind && src.kind !== 'wa') continue;
+        if (wa.getSocket() !== sock || wa.getStatus().status !== 'open') break;
+        if (!CH.hasActiveSource(src.jid)) continue;
         try {
           const posts = await withTimeout(wa.fetchChannelPosts(sock, src.jid, 8), 25000).catch(() => null);
-          if (posts === null) { fetchFail += 1; continue; }   // the fetch itself failed (dead connection)
-          fetchOk += 1;
-          let fed = 0;
-          for (const m of posts) {
-            if (!m?.key?.id || !m.messageTimestamp) continue;
-            if (Date.now() / 1000 - m.messageTimestamp > 15 * 60) continue; // fresh posts only
-            if (require('./db').P.seen(src.jid, m.key.id)) continue;
-            wa.events.emit('wa.message', m);
-            fed += 1;
+          if (posts === null) fetchFail += 1;
+          else {
+            fetchOk += 1;
+            let fed = 0;
+            for (const m of posts) {
+              if (!m?.key?.id || !m.messageTimestamp) continue;
+              if (Date.now() / 1000 - m.messageTimestamp > 15 * 60) continue;
+              if (require('./db').P.seen(src.jid, m.key.id)) continue;
+              wa.events.emit('wa.message', m);fed += 1;
+            }
+            if (fed) ring.info('channel.pull', `Submitted ${fed} candidate post(s) from ${src.name || src.jid} to the pipeline via the pull safety-net`);
           }
-          if (fed) ring.info('channel.pull', `Pulled ${fed} new post(s) from ${src.name || src.jid} — live push had not delivered them (safety-net fetch)`);
-        } catch { /* per-source best effort */ }
-        await new Promise((r) => setTimeout(r, 2000)); // gentle pace between sources
+        } catch { fetchFail += 1; }
+        await new Promise((r) => setTimeout(r, 2000)); // also pace failed fetches
       }
       /* v7.3.7: ZOMBIE SOCKET WATCHDOG. The socket claims "open" yet cannot
          complete a SINGLE fetch for 3 straight cycles: the connection is dead
@@ -80,6 +101,7 @@ function startPullPoll() {
          reconnect — the "bot stopped, no response" state). Force a clean
          reconnect with the saved login; missed posts auto-recover after it. */
       const total = fetchOk + fetchFail;
+      if (wa.getSocket() !== sock || wa.getStatus().status !== 'open') return;
       if (total > 0 && fetchOk === 0) {
         failStreak += 1;
         if (failStreak === 1) ring.warn('channel.pull.fail', `Pull safety-net: all ${total} source fetch(es) failed while the socket reports "open" — the connection may be dead (self-repair after 2 more full-failure cycles)`);
@@ -101,13 +123,16 @@ function startPullPoll() {
  * MISSED-POST RECOVERY — runs once ~40 s after the bot (re)connects: pulls up
  * to 20 posts per source and feeds anything newer than the source was added /
  * the last 6 h that was never processed. This is how the bot catches up after
- * a Heroku dyno night-sleep or a deploy: nothing posted while offline is lost.
+ * a restart. This is a bounded sample, not proof that nothing was missed.
  */
 async function recoverMissed() {
   const sock = wa.getSocket();
   if (!sock || wa.getStatus().status !== 'open') return;
   let total = 0;
   for (const src of CH.listActiveSources()) {
+    if (src.kind && src.kind !== 'wa') continue;
+    if (wa.getSocket() !== sock || wa.getStatus().status !== 'open') break;
+    if (!CH.hasActiveSource(src.jid)) continue;
     try {
       const posts = await wa.fetchChannelPosts(sock, src.jid, 20).catch(() => []);
       const addedTs = Date.parse(String(src.added_at || '').replace(' ', 'T') + 'Z') || 0;
@@ -120,18 +145,15 @@ async function recoverMissed() {
         wa.events.emit('wa.message', m);
         fed += 1; total += 1;
       }
-      if (fed) ring.info('channel.recovery', `Recovered ${fed} missed post(s) from ${src.name || src.jid} (posted while the bot was offline/restarting)`);
+      if (fed) ring.info('channel.recovery', `Submitted ${fed} candidate post(s) from ${src.name || src.jid} to the recovery pipeline`);
     } catch { /* per-source best effort */ }
     await new Promise((r) => setTimeout(r, 2500));
   }
-  if (total) ring.info('channel.recovery.done', `Catch-up complete: ${total} missed post(s) recovered and published`);
-  // 5A (R47): record the pass result so the Live Queue view can show it
-  await new Promise((r) => setTimeout(r, 8000)); // let the fed posts finish their pipeline pass
-  try {
-    const rows = require('./db').open().prepare("SELECT status, COUNT(*) n FROM posts WHERE created_at >= datetime('now', '-3 minutes') GROUP BY status").all();
-    const sum = Object.fromEntries(rows.map((r) => [r.status, r.n]));
-    require('./queue5a').recordRecovery({ fed: total, recovered: sum.published || 0, queued: sum.queued || 0, failed: sum.failed || 0, skipped: sum.skipped || 0 });
-  } catch { /* results display is best-effort */ }
+  if (total) ring.info('channel.recovery.done', `Catch-up submitted ${total} candidate post(s) to the pipeline; check history for actual outcomes`);
+  // Events are asynchronous and other posts may run concurrently. Counts from
+  // recent history cannot be attributed to this pass, so report only submissions.
+  try { require('./queue5a').recordRecovery({fed:total,outcomesKnown:false}); } catch { }
+
 }
 
 /* ---------------- v7.4.0: AI-CONTROL CATCH-UP ----------------
@@ -153,10 +175,14 @@ async function catchUp(opts = {}) {
     throw new Error('WhatsApp is not connected — connect the number first, then ask again.');
   }
   const perSource = [];
-  let fed = 0;
+  let fed = 0,attempted=0,failed=0,aborted=false;
   for (const src of CH.listActiveSources()) {
-    let posts = [];
-    try { posts = (await wa.fetchChannelPosts(sock, src.jid, limit).catch(() => [])) || []; } catch { posts = []; }
+    if (src.kind && src.kind !== 'wa') continue;
+    if (wa.getSocket() !== sock || wa.getStatus().status !== 'open') {aborted=true;break;}
+    if (!CH.hasActiveSource(src.jid)) continue;
+    let posts;attempted++;
+    try {posts=await withTimeout(wa.fetchChannelPosts(sock,src.jid,limit),25000);if(!Array.isArray(posts))throw new Error('Invalid response');}
+    catch {failed++;await new Promise(r=>setTimeout(r,2500));continue;}
     const addedTs = Date.parse(String(src.added_at || '').replace(' ', 'T') + 'Z') || 0;
     const floor = Math.max(addedTs / 1000, Date.now() / 1000 - hours * 3600);
     const missed = [];
@@ -177,12 +203,9 @@ async function catchUp(opts = {}) {
     }
     await new Promise((r) => setTimeout(r, 2500)); // gentle pace
   }
-  if (dryRun) return { mode: 'list', hours, perSource, totalMissed: perSource.reduce((a, x) => a + x.missed, 0) };
-  return {
-    mode: 'fed', hours, perSource, fed,
-    note: fed ? 'These posts are going through the normal pipeline now (cleaning, AI, rate guard, publish) — check the Posts tab.'
-      : 'Nothing missed in that window — everything posted is already handled.'
-  };
+  const note='Limited sampled history only; fetch errors, older posts, provider limits or an interrupted pass can hide missed posts. Check the Posts tab for outcomes.';
+  if (dryRun) return {mode:'list',hours,perSource,totalMissed:perSource.reduce((a,x)=>a+x.missed,0),attempted,failed,aborted,note};
+  return {mode:'fed',hours,perSource,fed,attempted,failed,aborted,note};
 }
 /** read-only listing for the AI (never feeds anything) */
 function missedList(opts) { return catchUp({ ...opts, dryRun: true }); }
@@ -279,8 +302,8 @@ async function refreshDirectory() {
       // v6.4: the REAL channel name flows into the Sources/Targets tabs too —
       // the owner sees names, never bare numbers
       if (validName(meta.name, d.jid)) CH.renameChannel(d.jid, meta.name);
-      const isSrc = CH.listSources().some((s) => s.jid === d.jid);
-      const isTgt = CH.listTargets().some((t) => t.jid === d.jid);
+      const isSrc = CH.hasSource(d.jid);
+      const isTgt = CH.hasTarget(d.jid);
       const dec = unfollowDecision(notFollowed.get(d.jid), Boolean(meta.role), isSrc, Date.now() - openedAt);
       notFollowed.set(d.jid, dec.streak);
       if (dec.remove) {
@@ -291,7 +314,7 @@ async function refreshDirectory() {
       }
       // no viewer role at all = this account no longer follows the channel →
       // it can not produce posts and must not appear in the pickers
-      if (!meta.role && !CH.listSources().some((s) => s.jid === d.jid) && !isTgt) {
+      if (!meta.role && !CH.hasSource(d.jid) && !isTgt) {
         CH.forgetDir(d.jid);
       }
     }
@@ -299,7 +322,7 @@ async function refreshDirectory() {
   }
   // also enrich sources/targets that are not in the directory yet (added by invite link)
   for (const row of [...CH.listSources(), ...CH.listTargets()]) {
-    if (CH.dirList().some((d) => d.jid === row.jid)) continue;
+    if (CH.hasDirectory(row.jid)) continue;
     try {
       const meta = await wa.channelMeta(sock, row.jid);
       if (meta) {
@@ -318,6 +341,7 @@ function scanStatus() { return lastScan; }
 
 /* ---------------- hands-off auto-setup ---------------- */
 async function autoTarget() {
+  if (!S.getBool('channels.autotarget', true)) return;
   try {
     if (CH.listActiveTargets().length > 0) return;
     const owners = CH.dirList().filter((c) => c.role === 'OWNER');
@@ -334,7 +358,7 @@ function autoMonitor(newChannels) {
   if (!S.getBool('channels.automonitor', true)) return;
   let added = 0;
   for (const { jid, name } of newChannels) {
-    if (CH.listTargets().some((t) => t.jid === jid)) continue; // never mirror a target into itself
+    if (CH.hasTarget(jid)) continue; // never mirror a target into itself
     const r = CH.addSource(jid, name, 'auto-follow');
     if (r.ok) added += 1;
   }
@@ -343,7 +367,7 @@ function autoMonitor(newChannels) {
     // v6: subscribe every newly added source immediately (the silent-feed bug, killed)
     (async () => {
       for (const { jid } of newChannels) {
-        if (!CH.listActiveSources().some((s) => s.jid === jid)) continue;
+        if (!CH.hasActiveSource(jid)) continue;
         await subscribe(jid);
         await new Promise((r) => setTimeout(r, 700));
       }
@@ -388,15 +412,15 @@ function init() {
      receives posts from channels it follows). WhatsApp ships no
      list-my-follows query (the 12-query proof in FINAL-REPORT §13), so a
      channel's first post while connected is the reliable live signal.
-     Record it with a viewer role and let auto-monitor (on by default, and
-     the whole point of this feature) turn it into a Source — exactly the
+     Record it with a viewer role and, when auto-monitor is enabled, let it
+     become a Source — exactly the
      same result as following it from Browse, zero clicks. */
   wa.events.on('wa.message', (m) => {
     try {
       const jid = String((m && m.key && m.key.remoteJid) || '');
       if (!jid.endsWith('@newsletter')) return;
-      if (CH.listTargets().some((t) => t.jid === jid)) return; // your own channel is the target, never a source
-      if (CH.dirList().some((d) => d.jid === jid)) return;    // already known — nothing to detect
+      if (CH.hasTarget(jid)) return; // your own channel is the target, never a source
+      if (CH.hasDirectory(jid)) return;    // already known — nothing to detect
       // v1.2: a post's pushName is often missing/numeric — store '' instead of
       // the jid; resolveMissingNames() recovers the real name from WhatsApp.
       const name = cleanName(m.pushName, jid);
@@ -409,19 +433,7 @@ function init() {
   // v6.4 keep-alive for live push: every 60 s, re-subscribe any source whose
   // subscription is missing or about to expire. WhatsApp EXPIRES live-update
   // subscriptions — without this, posts silently degrade to safety-net speed.
-  setInterval(async () => {
-    const sock = wa.getSocket();
-    if (!sock || wa.getStatus().status !== 'open') return;
-    const now = Date.now();
-    const due = CH.listActiveSources().filter((s) => {
-      const until = subOkUntil.get(s.jid) || 0;
-      return until < now + 30000; // expired, never-subscribed, or expiring within 30 s
-    });
-    for (const s of due) {
-      await subscribe(s.jid);
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-  }, 60 * 1000).unref?.();
+  setInterval(() => { runSubscriptionPass({onlyDue:true}).catch(err=>ring.warn('channel.subscribe.pass',`Subscription pass failed: ${err.message}`)); }, 60 * 1000).unref?.();
 
   // periodic follow verification + name sync (every 10 min)
   setInterval(() => refreshDirectory().catch(() => { }), 10 * 60 * 1000).unref?.();
@@ -434,6 +446,7 @@ function init() {
 }
 
 const autoMonitorFlag = () => S.getBool('channels.automonitor', true);
+const autoTargetFlag = () => S.getBool('channels.autotarget', true);
 const setAutoMonitor = (on) => S.set('channels.automonitor', on ? '1' : '0');
 
 /* ---------------- v7.8.0 · Browse: follow channels from the dashboard ---------------- */
@@ -474,13 +487,13 @@ async function browseFollow(linkOrCode, opts = {}) {
      Source, regardless of the Auto-monitor switch (an explicit user action,
      not an automation). */
   let addedToSources = false;
-  if (!CH.listTargets().some((t) => t.jid === jid) && !CH.listSources().some((s) => s.jid === jid)) {
+  if (!CH.hasTarget(jid) && !CH.hasSource(jid)) {
     const r = CH.addSource(jid, cleanName(name, jid, dirRow && dirRow.name), 'browse-follow');
     if (r.ok) { addedToSources = true; subscribe(jid).catch(() => { }); }
   }
   // display name: the real name when known, else a masked label — never raw digits
   const dispName = validName(name, jid) ? name : (dirRow && validName(dirRow.name, jid) ? dirRow.name : ('Channel •' + String(jid).split('@')[0].slice(-4)));
-  return { ok: true, already: !followed, code, jid, name: dispName, addedToSources, inSources: CH.listSources().some((s) => s.jid === jid) };
+  return { ok: true, already: !followed, code, jid, name: dispName, addedToSources, inSources: CH.hasSource(jid) };
 }
 
 /** One-click (Sources tab): every channel this account follows on WhatsApp
@@ -489,8 +502,8 @@ function syncFollowed() {
   const added = [];
   for (const d of CH.dirList()) {
     if (!d.role) continue;
-    if (CH.listTargets().some((t) => t.jid === d.jid)) continue;
-    if (CH.listSources().some((s) => s.jid === d.jid)) continue;
+    if (CH.hasTarget(d.jid)) continue;
+    if (CH.hasSource(d.jid)) continue;
     const r = CH.addSource(d.jid, cleanName(d.name, d.jid), 'sync-followed');
     if (r.ok) {
       added.push(d.name || d.jid);
@@ -516,7 +529,7 @@ async function browseUnfollow(ref) {
   const name = (CH.dirList().find((d) => d.jid === jid) || {}).name || jid;
   await sock.newsletterUnfollow(jid);
   notFollowed.set(jid, 2); // next periodic scan confirms the absence
-  const wasSource = CH.listSources().some((s) => s.jid === jid);
+  const wasSource = CH.hasSource(jid);
   if (wasSource) {
     CH.removeSource(jid);
     AUD.log('owner', 'sources.unfollow-removed', `Stopped following “${name}” from the dashboard — removed from Sources`);
@@ -525,7 +538,7 @@ async function browseUnfollow(ref) {
      until the 10-minute verification scan, so Browse, the "You follow N"
      banner and every badge kept claiming the account still followed the
      channel — the stale-state complaint, killed at the source. */
-  if (!CH.listTargets().some((t) => t.jid === jid)) CH.setDirRole(jid, '');
+  if (!CH.hasTarget(jid)) CH.setDirRole(jid, '');
   AUD.log('owner', 'browse.unfollow', `Unfollowed “${name}” from the dashboard (Browse)`);
   ring.warn('channel.unfollowed', `No longer following “${name}” — removed it from Sources`);
   return { ok: true, jid, name, removedFromSources: wasSource };
@@ -538,7 +551,7 @@ async function browseAddSource(ref) {
   if (jid && !jid.includes('@newsletter')) jid = (await browseResolve(ref)).jid;
   const dirRow = CH.dirList().find((d) => d.jid === jid);
   if (!dirRow) throw new Error('Channel not found — follow it first, then add it to Sources.');
-  if (CH.listTargets().some((t) => t.jid === jid)) throw new Error('That channel is one of your TARGETS — it can’t be mirrored as its own source.');
+  if (CH.hasTarget(jid)) throw new Error('That channel is one of your TARGETS — it can’t be mirrored as its own source.');
   const r = CH.addSource(jid, cleanName(dirRow.name, jid), 'browse-add');
   if (!r.ok) return { ok: true, already: true, jid, name: dirRow.name || jid };
   subscribe(jid).catch(() => { });
@@ -547,4 +560,4 @@ async function browseAddSource(ref) {
   return { ok: true, already: false, jid, name: dirRow.name || jid };
 }
 
-module.exports = { init, subscribe, autoMonitor, autoMonitorFlag, setAutoMonitor, catchUp, missedList, recoverMissed, scanChannels, scanStatus, unfollowDecision, refreshDirectory, browseFollow, browseUnfollow, browseAddSource, browseResolve, syncFollowed, resolveMissingNames, validName, cleanName };
+module.exports = { init, subscribe, runSubscriptionPass, startPullPoll, autoMonitor, autoMonitorFlag, autoTarget, autoTargetFlag, setAutoMonitor, catchUp, missedList, recoverMissed, scanChannels, scanStatus, unfollowDecision, refreshDirectory, browseFollow, browseUnfollow, browseAddSource, browseResolve, syncFollowed, resolveMissingNames, validName, cleanName };

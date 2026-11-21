@@ -268,6 +268,22 @@ const GROUP_LABEL = {
   audience: 'AUDIENCE & AUTOMATION', system: 'SYSTEM & WORKSPACE'
 };
 const loaders = {};
+/* Home is a compact workspace, with complete secondary views one click away. */
+function activateHomePanel(name) {
+  const panels = $$('[data-home-panel]');
+  if (!panels.some(p => p.dataset.homePanel === name)) return;
+  panels.forEach(p => { p.hidden = p.dataset.homePanel !== name; });
+  $$('[data-home-sheet][role=tab]').forEach(b => { const on=b.dataset.homeSheet === name; b.classList.toggle('on',on); b.setAttribute('aria-selected',String(on)); b.tabIndex=on?0:-1; });
+  requestAnimationFrame(() => window.__fitWorkspacePanes?.());
+}
+document.addEventListener('click', e => { const b=e.target.closest('[data-home-sheet]'); if (b) activateHomePanel(b.dataset.homeSheet); });
+document.querySelector('.home-tabs')?.addEventListener('keydown', e => {
+  if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) return;
+  const tabs = $$('[data-home-sheet][role=tab]'), current = tabs.findIndex(b=>b.classList.contains('on'));
+  const index = e.key==='Home'?0:e.key==='End'?tabs.length-1:(current+(['ArrowRight','ArrowDown'].includes(e.key)?1:-1)+tabs.length)%tabs.length;
+  e.preventDefault(); activateHomePanel(tabs[index].dataset.homeSheet); tabs[index].focus();
+});
+activateHomePanel('overview');
 let currentView = 'home';
 function show(view) {
   view = LEGACY_VIEWS[view] || view;
@@ -301,12 +317,14 @@ function show(view) {
   const sec = $(`.view[data-view="${view}"]`);
   if (sec) { sec.classList.remove('view-in'); void sec.offsetWidth; sec.classList.add('view-in'); }
   paintRecent(view);
+  requestAnimationFrame(() => window.__fitWorkspacePanes?.());
   const ld = loaders[view];
   if (!ld) return;
   const oldErr = sec && sec.querySelector('.view-err');
   if (oldErr) oldErr.remove();
   ld().then(() => deepRowMaybe()).catch((e) => {
     toast(e.message, 'err');
+    if (view === 'home' && $('#overviewFreshness')) $('#overviewFreshness').textContent = 'Overview unavailable — refresh';
     if (!sec) return;
     const box = document.createElement('div');
     box.className = 'card view-err';
@@ -371,7 +389,7 @@ function deepRowMaybe() {
   const sec = $(`.view[data-view="${currentView}"]`);
   if (!sec) return;
   const row = sec.querySelector(`[data-row="${CSS.escape(id)}"]`);
-  if (row) { row.scrollIntoView({ block: 'center' }); row.classList.add('row-flash'); setTimeout(() => row.classList.remove('row-flash'), 1600); }
+  if (row) { window.showWorkspaceElement?.(row); row.scrollIntoView({ block: 'center' }); row.classList.add('row-flash'); setTimeout(() => row.classList.remove('row-flash'), 1600); }
 }
 
 /* ── 5 · STATUS + SSE ───────────────────────────────────────────── */
@@ -426,6 +444,7 @@ setInterval(pollStatus, 30000);
   if (__pill) __pill.addEventListener('click', () => {
     if (window.__waStatus === 'open') { show('whatsapp'); return; }
     show('home');
+    activateHomePanel('recovery');
     const q = $('#qrCard');
     if (q) q.hidden = false;
     setTimeout(() => { if (q && q.isConnected) q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 60);
@@ -469,17 +488,17 @@ setInterval(pollStatus, 30000);
       /* queue status */
       const hq = $('#homeQueue');
       if (hq) {
-        const pending = (q && q.pending && q.pending.length) || (ov && ov.queue && ov.queue.pending) || 0;
+        const pending = (ov && ov.queue && ov.queue.pending) || 0;
         const delayed = (q && q.queued) || 0;
         const approved = (q && q.approved && q.approved.length) || 0;
-        hq.innerHTML = `
-          <div class="queue-total"><strong>${pending}</strong><span>pending approval</span></div>
+        hq.innerHTML = q ? `
+          <div class="queue-total"><strong>${pending}</strong><span>pending in queue</span></div>
           <div class="queue-metrics">
             <div><i class="metric-dot amber-dot"></i><span>Pending</span><strong>${pending}</strong></div>
-            <div><i class="metric-dot blue-dot"></i><span>Delayed</span><strong>${delayed}</strong></div>
-            <div><i class="metric-dot green-dot"></i><span>Approved</span><strong>${approved}</strong></div>
+            <div><i class="metric-dot blue-dot"></i><span>Queued posts</span><strong>${delayed}</strong></div>
+            <div><i class="metric-dot green-dot"></i><span>Approved in list</span><strong>${approved}</strong></div>
           </div>
-          <button class="btn btn-g full-width" data-goview="approvals">Review approvals →</button>`;
+          <button class="btn btn-g full-width" data-goview="approvals">Review queue →</button>` : '<p class="muted tiny">Queue details unavailable. Refresh to try again.</p>';
       }
       /* system health — v11: mockup 01 layout, one segment per real check (8 checks) */
       const hh = $('#homeHealth');
@@ -523,9 +542,12 @@ setInterval(pollStatus, 30000);
     } catch (e) { /* panels keep their last good state */ }
   };
   /* Home activity chart — real hourly outcome counts for the last 24 h */
-  window.sdPaintHomeChart = async () => {
+  window.sdPaintHomeChart = async (d) => {
     const host = $('#homeChartSvg'); if (!host) return;
-    let d; try { d = await api('/api/overview/hourly'); } catch (e) { return; }
+    if (!d || !Array.isArray(d.buckets) || !d.buckets.length) {
+      host.replaceChildren(); $('#homeChartY').replaceChildren(); $('#homeChartX').replaceChildren();
+      $('#homeChartFoot').textContent='Activity data unavailable — refresh to try again.'; return;
+    }
     const B = (d && d.buckets) || [], L = (d && d.labels) || [];
     if (!B.length) return;
     const max = Math.max(1, ...B.flatMap((b) => [b.published, b.skipped, b.failed]));
@@ -535,7 +557,7 @@ setInterval(pollStatus, 30000);
     const line = (key) => B.map((b, i) => `${i ? 'L' : 'M'}${x(i)} ${y(b[key] || 0)}`).join(' ');
     const areaPub = `M0 ${BOT} ` + B.map((b, i) => `L${x(i)} ${y(b.published || 0)}`).join(' ') + ` L${W} ${BOT} Z`;
     const grid = `M0 ${y(max)}H${W} M0 ${y(max * 2 / 3)}H${W} M0 ${y(max / 3)}H${W} M0 ${BOT}H${W}`;
-    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Post outcomes over the last 24 hours">
+    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Post outcomes over the last 24 hours: ${B.reduce((n,b)=>n+(b.published||0),0)} published, ${B.reduce((n,b)=>n+(b.skipped||0),0)} skipped, ${B.reduce((n,b)=>n+(b.failed||0),0)} failed.">
       <defs><linearGradient id="sdArea" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".18"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
       <path class="gridline" d="${grid}"/>
       <path class="area-published" d="${areaPub}" fill="url(#sdArea)"/>
@@ -544,9 +566,9 @@ setInterval(pollStatus, 30000);
       <path class="line-failed" d="${line('failed')}"/>
     </svg>`;
     const cy = $('#homeChartY');
-    if (cy) cy.innerHTML = `<span>${max}</span><span>${Math.round(max * 2 / 3)}</span><span>${Math.round(max / 3)}</span><span>0</span>`;
+    if (cy) cy.innerHTML = [max,max*2/3,max/3,0].map(n=>`<span>${n % 1 ? n.toFixed(1) : n}</span>`).join('');
     const cx = $('#homeChartX');
-    if (cx) { const picks = [0, 4, 8, 12, 16, 20, B.length - 1]; cx.innerHTML = picks.map((i) => `<span>${L[i] || ''}</span>`).join(''); }
+    if (cx) { const picks = [0, 4, 8, 12, 16, 20, B.length - 1]; cx.innerHTML = picks.map((i) => `<span>${esc(L[i] || '')}</span>`).join(''); }
     const tot = B.reduce((a, b) => a + (b.published || 0) + (b.skipped || 0) + (b.failed || 0), 0);
     const foot = $('#homeChartFoot');
     if (foot) foot.textContent = tot ? `${tot} post outcome(s) in the last 24 hours, Pakistan time.` : 'No post outcomes in the last 24 hours yet.';
@@ -556,8 +578,7 @@ setInterval(pollStatus, 30000);
     const g = e.target.closest('[data-goview]');
     if (!g) return;
     const view = g.dataset.goview;
-    const item = $$('.sb-item').find((a) => a.dataset.view === view);
-    if (item) item.click();
+    if (TITLES[view]) { e.preventDefault(); show(view); }
   });
   /* Appearance settings and quick switch stay in sync. */
   const tr = $('#themeRadios');
@@ -641,7 +662,8 @@ async function refreshChannels(kind, opts = {}) {
     chanSync[kind] = Date.now();
     stampSync(kind);
     if (!tbody || $(`.view[data-view="${kind}"]`).hidden) return d;
-    tbody.innerHTML = channelRows(d.list || [], kind);
+    if (kind === 'sources') { sourcePageSet(d.list || []); srcFollowedBanner(d.followedMissing || []); }
+    else tbody.innerHTML = channelRows(d.list || [], kind);
     $(kind === 'sources' ? '#srcCount' : '#tgtCount').textContent = (d.list || []).length;
     if (kind === 'sources') refreshPicker('sources');
     if (kind === 'targets') { refreshPicker('targets'); fillSchedTargets(d.list || []); }
@@ -848,7 +870,7 @@ function openModal(opts) {
   const head = `<div class="mb-h"><span class="m-ic"></span>${esc(opts.title)}</div>`;
   _modalScrim.innerHTML = `<div class="mb${opts.danger ? ' mb-danger' : ''}" role="dialog" aria-modal="true" aria-label="${esc(opts.title)}">
     ${head}
-    <div class="mb-b">${opts.html || ''}</div>
+    <div class="mb-b" tabindex="0">${opts.html || ''}</div>
     ${opts.actions === false ? '' : `<div class="mb-f"><button class="btn" data-mclose>Close</button>${opts.primary ? `<button class="btn ${opts.danger ? 'btn-d' : 'btn-p'}" data-mprimary>${esc(opts.primaryLabel || 'Confirm')}</button>` : ''}</div>`}
   </div>`;
   if (opts.icon) _modalScrim.querySelector('.m-ic').innerHTML = opts.icon;
@@ -863,8 +885,9 @@ function openModal(opts) {
     const p = _modalScrim.querySelector('[data-mprimary]');
     p.addEventListener('click', () => { const ok = opts.primary(); if (ok !== false) closeModal(); });
   }
-  const focusables = () => $$('button, [href], input, select, textarea', _modalScrim).filter((el) => !el.disabled && el.offsetParent !== null);
-  setTimeout(() => { const f = focusables(); if (f.length) (opts.primary ? _modalScrim.querySelector('[data-mprimary]') : f[0]).focus(); }, 30);
+  const focusables = () => $$('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])', _modalScrim).filter((el) => !el.disabled && el.offsetParent !== null);
+  const focusModal=_modalScrim;
+  setTimeout(() => { if (_modalScrim !== focusModal || !focusModal.isConnected) return; const f = focusables(); if (f.length) (opts.primary && !opts.danger ? focusModal.querySelector('[data-mprimary]') || f[0] : f[0]).focus(); }, 30);
   const onDocKey = (ev) => { if (ev.key === 'Escape') closeModal(); };
   document.addEventListener('keydown', onDocKey);
   _modalScrim._docKey = onDocKey;
@@ -922,14 +945,15 @@ function mountPicker(mount, opts) {
   el.className = 'cp' + (jidVisible() ? ' show-jid' : '');
   const isTgt = opts.kind === 'targets';
   el.innerHTML = `
-    <button type="button" class="cp-btn" data-cpbtn aria-haspopup="listbox">
+    <button type="button" class="cp-btn" data-cpbtn aria-expanded="false">
       <span class="cp-ph">${esc(opts.placeholder || 'Pick channels…')}</span>
-      <span class="chips cp-chips"></span>
       <span class="chev">${_chev()}</span>
     </button>
+    <div class="chips cp-chips" aria-label="Selected channels"></div>
     <div class="cp-panel" hidden>
       <div class="cp-search"><input class="in" placeholder="Search your channels…" autocomplete="off" aria-label="Search channels"></div>
-      <div class="cp-list" role="listbox"></div>
+      <div class="cp-list" role="group" aria-label="Available channels"></div>
+      <div class="cp-page"><button type="button" class="btn btn-sm" data-cpprev>Previous</button><span data-cppage role="status" aria-live="polite"></span><button type="button" class="btn btn-sm" data-cpnext>Next</button></div>
       <div class="cp-foot"><span class="muted tiny" data-cpnote></span><span class="cnt" data-cpcnt></span>${opts.mode === 'multi' ? '<button class="btn btn-p btn-sm" data-cpadd>Add selected</button>' : ''}</div>
     </div>`;
   mount.appendChild(el);
@@ -938,17 +962,21 @@ function mountPicker(mount, opts) {
         chips = el.querySelector('.cp-chips'), cnt = el.querySelector('[data-cpcnt]'),
         note = el.querySelector('[data-cpnote]');
   note.textContent = isTgt ? 'only owner / admin channels are listed' : 'channels followed by this number';
-  let rows = [], kbIdx = -1;
+  let rows = [], kbIdx = -1, initialized = false, page = 0;
+  const prev=el.querySelector('[data-cpprev]'), next=el.querySelector('[data-cpnext]'), pageInfo=el.querySelector('[data-cppage]');
+  const selections = new Set();
 
   function _chev() { return '<svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'; }
 
   function render(q) {
     const nq = (q || '').toLowerCase();
-    const hits = rows.filter((c) => !nq || String(c.name || '').toLowerCase().includes(nq) || c.jid.includes(nq));
+    const hits = rows.filter((c) => !nq || String(c.name || '').toLowerCase().includes(nq) || c.jid.toLowerCase().includes(nq));
+    const pages=Math.max(1,Math.ceil(hits.length/50));page=Math.max(0,Math.min(page,pages-1));const start=page*50,visible=hits.slice(start,start+50);
+    pageInfo.textContent=hits.length ? `${start+1}–${start+visible.length} of ${hits.length}` : 'No matches';prev.disabled=page===0;next.disabled=page>=pages-1;
     kbIdx = -1;
-    list.innerHTML = hits.length ? hits.map((c, i) => `
-      <div class="cp-row" data-jid="${esc(c.jid)}" data-i="${i}" role="option">
-        <input type="${opts.mode === 'multi' ? 'checkbox' : 'radio'}" name="cp-${opts.kind}" value="${esc(c.jid)}" ${c.disabled ? 'checked disabled' : ''} aria-label="${esc(chanName(c))}">
+    list.innerHTML = visible.length ? visible.map((c, i) => `
+      <div class="cp-row" data-jid="${esc(c.jid)}" data-i="${i}">
+        <input type="${opts.mode === 'multi' ? 'checkbox' : 'radio'}" name="cp-${opts.kind}" value="${esc(c.jid)}" ${c.disabled ? 'checked disabled' : (selections.has(c.jid) ? 'checked' : '')} aria-label="${esc(chanName(c))}">
         <span class="cp-name">${esc(chanName(c))}</span>
         ${c.role === 'OWNER' ? '<span class="b b-ok">owner</span>' : c.role === 'ADMIN' ? '<span class="b b-info">admin</span>' : ''}
         <span class="cp-sub">${fmtNum(c.subs)}</span>
@@ -956,20 +984,22 @@ function mountPicker(mount, opts) {
       </div>`).join('')
       : `<div class="cp-empty">${isTgt ? 'No postable channels found — follow channels on WhatsApp where you are admin, or paste an invite link.' : 'No channels in your synced list yet — connect the number, follow some channels on WhatsApp, and they appear here.'}</div>`;
       cnt.textContent = opts.mode === 'multi' ? selAll().length + ' selected' : '';
-      $$('.cp-row', list).forEach((r) => r.addEventListener('click', () => {
+      $$('.cp-row', list).forEach((r) => r.addEventListener('click', (event) => {
         const cb = r.querySelector('input');
         if (cb.disabled) return;
-        if (opts.mode === 'multi') { cb.checked = !cb.checked; }
+        if (opts.mode === 'multi') { if (event.target !== cb) cb.checked = !cb.checked; }
         else {
           $$('input', list).forEach((x) => { x.checked = false; });
           cb.checked = true;
         }
+        if (opts.mode !== 'multi') selections.clear();
+        if (cb.checked) selections.add(cb.value); else selections.delete(cb.value);
         cnt.textContent = opts.mode === 'multi' ? selAll().length + ' selected' : (cb.checked ? '1 selected' : '');
         if (opts.mode === 'multi') paintChips();
       }));
   }
   function selected(includeDisabled = false) {
-    return $$('input', list).filter((i) => i.checked && (includeDisabled || !i.disabled)).map((i) => i.value);
+    return rows.filter(c => (selections.has(c.jid) || (includeDisabled && c.disabled)) && (includeDisabled || !c.disabled)).map(c => c.jid);
   }
   const selAll = () => selected(opts.showChecked === 'all');
   async function load() {
@@ -978,7 +1008,7 @@ function mountPicker(mount, opts) {
       if (opts.listFrom === 'targets') {
         /* composer: the list IS the set of postable targets — all selectable */
         const t = await api('/api/targets');
-        rows2 = (t.list || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))
+        rows2 = (t.list || []).filter(c => !c.paused).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))
           .map((c) => ({ ...c, disabled: false }));
       } else {
         const [dir, cur] = await Promise.all([api('/api/directory'), api('/api/' + opts.kind)]);
@@ -990,9 +1020,12 @@ function mountPicker(mount, opts) {
         rows2 = list2.map((c) => ({ ...c, disabled: have.has(c.jid) }));
       }
       rows = rows2;
+      const available = new Set(rows.map(c=>c.jid));
+      for (const id of selections) if (!available.has(id)) selections.delete(id);
+      if (!initialized && opts.preselect === 'all') rows.filter(c=>!c.disabled).forEach(c=>selections.add(c.jid));
+      initialized = true;
       render(search.value);
       if (opts.mode === 'multi') {
-        if (opts.preselect === 'all') $$('input', list).forEach((i) => { if (!i.disabled) i.checked = true; });
         cnt.textContent = opts.mode === 'multi' ? selAll().length + ' selected' : '';
         paintChips();
       }
@@ -1004,9 +1037,11 @@ function mountPicker(mount, opts) {
     const names = Object.fromEntries(rows.map((c) => [c.jid, chanName(c)]));
     const ids = selAll();
     chips.innerHTML = ids.map((j) => `<span class="chip">${esc(names[j] || dirNameLbl(j))}<button class="chip-x" data-x="${esc(j)}" aria-label="Remove ${esc(names[j] || '')}">${_x()}</button></span>`).join('');
-    $$('.chip-x', chips).forEach((b) => b.addEventListener('click', () => {
+    $$('.chip-x', chips).forEach((b) => b.addEventListener('click', (event) => {
+      event.stopPropagation();
       const row = $(`.cp-row[data-jid="${CSS.escape(b.dataset.x)}"] input`, list);
       if (row) row.checked = false;
+      selections.delete(b.dataset.x);
       cnt.textContent = selAll().length + ' selected';
       paintChips();
     }));
@@ -1017,11 +1052,15 @@ function mountPicker(mount, opts) {
     ev.stopPropagation();
     const open = panel.hidden;
     panel.hidden = !open;
+    btn.setAttribute('aria-expanded',String(open));
     el.classList.toggle('open', open);
     if (open) { load(); setTimeout(() => search.focus(), 30); }
   });
-  document.addEventListener('click', (ev) => { if (!panel.hidden && !el.contains(ev.target)) { panel.hidden = true; el.classList.remove('open'); } });
-  search.addEventListener('input', () => render(search.value));
+  document.addEventListener('click', (ev) => { if (!panel.hidden && !el.contains(ev.target)) { panel.hidden = true; btn.setAttribute('aria-expanded','false'); el.classList.remove('open'); } });
+  search.addEventListener('input', () => {page=0;render(search.value)});
+  prev.addEventListener('click',()=>{page--;render(search.value)});
+  next.addEventListener('click',()=>{page++;render(search.value)});
+  panel.addEventListener('keydown', e=>{ if(e.key==='Escape'){panel.hidden=true;btn.setAttribute('aria-expanded','false');el.classList.remove('open');btn.focus();} });
   search.addEventListener('keydown', (ev) => {
     const r = $$('.cp-row', list);
     if (!r.length) return;
@@ -1042,9 +1081,9 @@ function mountPicker(mount, opts) {
     addBtn.disabled = true;
     opts.onPick(jids).then((done) => {
       if (done === false) { addBtn.disabled = false; return; }
-      panel.hidden = true; el.classList.remove('open');
+      panel.hidden = true; btn.setAttribute('aria-expanded','false'); el.classList.remove('open');
       return load();
-    }).catch(() => { addBtn.disabled = false; });
+    }).catch(() => { toast('Could not update channels. Try again.', 'err'); }).finally(() => { addBtn.disabled = false; });
   });
   return {
     root: el,
@@ -1109,8 +1148,8 @@ function paintPauseBar(paused, waStatus) {
     status.classList.toggle('needs-attention', unlinked || Boolean(paused));
   }
   if (unlinked) {
-    head.textContent = 'Mirroring paused — WhatsApp disconnected.';
-    sub.textContent = 'Link WhatsApp to start mirroring.';
+    head.textContent = 'WhatsApp is disconnected';
+    sub.textContent = 'Mirroring cannot run until WhatsApp is linked.';
     btn.dataset.mode = 'link';
     btn.className = 'btn btn-p';
     ico('chat').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Connect WhatsApp via QR</span>'; });
@@ -1122,7 +1161,7 @@ function paintPauseBar(paused, waStatus) {
     ico('play').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Resume mirroring</span>'; });
   } else {
     head.textContent = 'Mirroring is running.';
-    sub.textContent = 'Every source → every target, automatically.';
+    sub.textContent = 'Active sources are processed using your routing and safety rules.';
     btn.dataset.mode = 'pause';
     btn.className = 'btn btn-d';
     ico('pause').then((svg) => { if (btn.isConnected) btn.innerHTML = svg + ' <span>Pause all mirroring</span>'; });
@@ -1131,6 +1170,7 @@ function paintPauseBar(paused, waStatus) {
 $('#pauseBtn').addEventListener('click', async () => {
   const btn = $('#pauseBtn');
   if (btn.dataset.mode === 'link') {
+    activateHomePanel('recovery');
     const q = $('#qrCard');
     if (q) { q.hidden = false; q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
     api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
@@ -1167,6 +1207,10 @@ function cloudBanner(cs) {
   const box = $('#cloudNote');
   if (!box) return;
   if (!cs) { box.innerHTML = ''; return; }
+  const recoveryTab = $('[data-home-sheet="recovery"]');
+  if (recoveryTab) { recoveryTab.classList.toggle('needs-attention', !cs.enabled || Boolean(cs.lastError)); recoveryTab.title = !cs.enabled ? 'Cloud snapshots are off; open setup and recovery' : (cs.lastError || 'Setup and recovery'); }
+  const cloudSummary = $('#cloudSummary');
+  if (cloudSummary) { cloudSummary.hidden = Boolean(cs.enabled && !cs.lastError); cloudSummary.textContent = !cs.enabled ? 'Cloud backups are off — review setup & recovery →' : cs.lastError ? 'Cloud backup needs attention — review recovery →' : ''; }
   if (!cs.enabled) {
     box.innerHTML = `<div class="card cloud-note bad">
       <b>Cloud memory is off — protect your data before deploying.</b>
@@ -1199,7 +1243,22 @@ loaders.home = async () => {
   const hPub = hB.map((b) => b.published || 0);
   const hFail = hB.map((b) => b.failed || 0);
   const wa = ov.wa || {};
+  const freshness = $('#overviewFreshness');
+  if (freshness) freshness.textContent = 'Overview checked ' + new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   paintPauseBar(Boolean(ov.mirrorPaused), wa.status);
+  // Actionable conditions from the same server response, never fabricated scores.
+  const priorities = [];
+  if (ov.panic && ov.panic.on) priorities.push({label:'Panic stop is active', detail:'Outbound automation is paused', action:'Review', view:'health', tone:'danger'});
+  else if (wa.status !== 'open') priorities.push({label:'Connect WhatsApp', detail:'Mirroring is unavailable until linked', action:'Connect', panel:'recovery', tone:'warning'});
+  else if (ov.mirrorPaused) priorities.push({label:'Mirroring is paused', detail:'Resume it when you are ready', action:'Review', panel:'overview', tone:'warning'});
+  const pending = Number((ov.queue && ov.queue.pending) || 0);
+  if (pending) priorities.push({label:pending + ' pending in queue', detail:'Review held or delayed posts', action:'Review', view:'approvals', tone:'warning'});
+  if (ov.today && ov.today.failed) priorities.push({label:ov.today.failed + ' failed today', detail:'Inspect history before retrying', action:'Inspect', view:'posts', tone:'danger'});
+  if (!ov.sources || !ov.targets) priorities.push({label:'Set up your channels', detail:(ov.sources || 0) + ' sources · ' + (ov.targets || 0) + ' targets', action:'Manage', view:!ov.sources?'sources':'targets', tone:'neutral'});
+  if (!ov.cloud || (ov.cloudStatus && ov.cloudStatus.lastError)) priorities.push({label:'Check backup setup', detail:!ov.cloud ? 'Cloud snapshots are off' : 'Cloud sync reported a problem', action:'Review', panel:'recovery', tone:'warning'});
+  const pulse = $('#pulseItems');
+  if (pulse) pulse.innerHTML = priorities.length ? priorities.slice(0,3).map(x=>`<div class="pulse-row"><span class="pulse-indicator ${esc(x.tone)}" aria-hidden="true"></span><span class="pulse-copy"><strong>${esc(x.label)}</strong><small>${esc(x.detail)}</small></span><button type="button" ${x.panel ? `data-home-sheet="${esc(x.panel)}"` : `data-goview="${esc(x.view)}"`}>${esc(x.action)} <span aria-hidden="true">↗</span></button></div>`).join('') : '<div class="pulse-clear"><span aria-hidden="true">✓</span><div><strong>No immediate actions</strong><small>Review system health for all checks.</small></div></div>';
+
   /* A concise, action-oriented status brief built only from live overview data. */
   const brief = $('#opsBriefItems');
   if (brief) {
@@ -1207,7 +1266,7 @@ loaders.home = async () => {
     const checks = [
       { title:'Connection', value:connected ? 'Connected' : 'Needs connection', detail:connected ? 'WhatsApp is ready.' : 'Link WhatsApp to publish and sync.', view:'whatsapp', action:connected ? 'Open inbox' : 'Connect', ok:connected },
       { title:'Channels', value:`${ov.sources} sources · ${ov.targets} targets`, detail:ov.sources && ov.targets ? 'Routing is ready to configure.' : 'Add a source and a target to start.', view:'sources', action:'Manage channels', ok:Boolean(ov.sources && ov.targets) },
-      { title:'Approval queue', value:`${(ov.queue && ov.queue.pending) || 0} pending`, detail:(ov.queue && ov.queue.pending) ? 'Review items waiting for a decision.' : 'No posts waiting for approval.', view:'approvals', action:'Open queue', ok:!(ov.queue && ov.queue.pending) },
+      { title:'Approval queue', value:`${(ov.queue && ov.queue.pending) || 0} pending`, detail:(ov.queue && ov.queue.pending) ? 'Review held or delayed items.' : 'No pending queue items.', view:'approvals', action:'Open queue', ok:!(ov.queue && ov.queue.pending) },
       { title:'Cloud memory', value:ov.cloud ? 'Enabled' : 'Not configured', detail:ov.cloud ? 'Check sync status and backups.' : 'Configure durable backups before deployment.', view:'settings', action:'Open settings', ok:Boolean(ov.cloud) }
     ];
     brief.innerHTML = checks.map(c => `<div class="ops-item"><div class="ops-item-top"><span class="ops-dot ${c.ok ? 'is-ok' : 'is-attention'}" aria-hidden="true"></span><span>${esc(c.title)}</span></div><strong>${esc(c.value)}</strong><p>${esc(c.detail)}</p><button class="ops-link" type="button" data-goview="${c.view}">${esc(c.action)} <span aria-hidden="true">↗</span></button></div>`).join('');
@@ -1228,6 +1287,7 @@ loaders.home = async () => {
   const orderIdx = (id) => { const i = savedOrder.indexOf(id); return i >= 0 ? i : 99; };
   $('#kpiGrid').innerHTML = kpiDefs.slice().sort((a, b) => orderIdx(a[0]) - orderIdx(b[0])).map(([id, html]) => html.replace('<div class="kpi"', `<div class="kpi kpi-drag" draggable="true" data-kpi="${id}" title="Drag to reorder — the order is saved"`)).join('');
   wireKpiDrag();
+  paintKpiOrderControls();
   /* v1.1: actionable empty states — a CTA inside the card instead of a dead-end zero (reuses the existing flows) */
   try {
     if (wa.status !== 'open') {
@@ -1239,6 +1299,7 @@ loaders.home = async () => {
         else {
           b.textContent = 'Connect WhatsApp via QR';
           b.addEventListener('click', () => {
+            activateHomePanel('recovery');
             const q = $('#qrCard');
             if (q) { q.hidden = false; q.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
             api('/api/qr').then((r) => { if (r && r.qr) { const im = $('#qrImg'); if (im) im.src = r.qr; } }).catch(() => {});
@@ -1296,8 +1357,16 @@ loaders.home = async () => {
     `<div class="tl-i"><span class="tl-ic" data-lv="${esc(l.level)}">${icoMap[l.level] || ''}</span><span class="tl-b"><b>${esc(l.code)}</b> — ${esc(l.msg)}</span><span class="tl-t">${when(l.ts)}</span></div>`).join('')
     || `<div class="tl-i"><span class="tl-b muted">No activity yet.</span></div>`;
   /* Signal Desk reference panels — queue / health / pacing + 24 h activity chart */
-  if (window.sdPaintHomePanels) { window.sdPaintHomePanels(ov).catch(() => { }); window.sdPaintHomeChart().catch(() => { }); }
+  if (window.sdPaintHomePanels) { window.sdPaintHomePanels(ov).catch(() => { }); window.sdPaintHomeChart(hourly).catch(() => { }); }
 };
+
+$('#overviewRefresh')?.addEventListener('click', async () => {
+  const button=$('#overviewRefresh'), state=$('#overviewFreshness');
+  button.disabled=true; state.textContent='Refreshing overview…';
+  try { await loaders.home(); }
+  catch (e) { state.textContent='Overview unavailable — refresh'; toast(e.message,'err'); }
+  finally { button.disabled=false; }
+});
 
 /* ── 11 · CHANNELS (sources / targets) ──────────────────────────── */
 function channelRows(list, kind) {
@@ -1314,51 +1383,50 @@ function channelRows(list, kind) {
       <td><span class="ch-row-name">${esc(chanName(c))}${rssBadge}${roleBadge}</span>${rssSub}${kind === 'sources' && String(c.targets || '').trim() ? `<div class="ch-sub">→ ${String(c.targets).split(',').filter(Boolean).length} mapped target(s)</div>` : ''}</td>
       <td class="ch-jid">${shortJid(c.jid)}</td>
       <td>${c.paused ? '<span class="b b-warn">paused</span>' : '<span class="b b-ok">active</span>'}${kind === 'sources' ? `<div class="ch-sub">last post: ${agoLabel(c.last_post_at)}</div>` : ''}</td>
-      ${kind === 'sources' ? `<td class="subs-cell" data-subcell="${esc(c.jid)}">${c.kind === 'rss' ? '<span class="mut tiny">n/a (feed)</span>' : '<span class="mut tiny">—</span>'}</td>` : ''}
+      ${kind === 'sources' ? `<td class="subs-cell" ${c.kind === 'rss' ? '' : `data-subcell="${esc(c.jid)}"`}>${c.kind === 'rss' ? '<span class="mut tiny">n/a (feed)</span>' : '<span class="mut tiny">—</span>'}</td>` : ''}
       <td class="muted tiny num">${when(c.added_at)}</td>
       <td><div class="ra">
-        ${kind === 'sources' ? '<button class="btn btn-sm" data-act="rules" title="Rule card: approve first, active hours, daily cap, keywords, priority">Rules</button><button class="btn btn-sm" data-act="map">Map</button>' : ''}
-        <button class="btn btn-sm" data-act="pause">${c.paused ? 'Resume' : 'Pause'}</button>
-        <button class="btn btn-sm btn-d" data-act="del">Remove</button>
+        ${kind === 'sources' ? `<button class="btn btn-sm" data-act="rules" aria-label="Rules for ${esc(chanName(c))}" title="Rule card: approve first, active hours, daily cap, keywords, priority">Rules</button><button class="btn btn-sm" data-act="map" aria-label="Map ${esc(chanName(c))} to targets">Map</button>` : ''}
+        <button class="btn btn-sm" data-act="pause" aria-label="${c.paused ? 'Resume' : 'Pause'} ${esc(chanName(c))}">${c.paused ? 'Resume' : 'Pause'}</button>
+        <button class="btn btn-sm btn-d" data-act="del" aria-label="Remove ${esc(chanName(c))}">Remove</button>
       </div></td>
     </tr>`;
   }).join('') || '<tr><td colspan="5" class="muted">Nothing yet — add one above.</td></tr>';
 }
 function wireChannelTable(tableSel, kind) {
   $(tableSel).addEventListener('click', async (ev) => {
-    const btn = ev.target.closest('button[data-act]');
-    if (!btn) return;
-    const tr = btn.closest('tr');
-    const jid = tr.dataset.jid;
+    const btn=ev.target.closest('button[data-act]');if(!btn || btn.disabled)return;
+    const tr=btn.closest('tr'),jid=tr.dataset.jid;
     try {
-      if (btn.dataset.act === 'rules') { openRulesModal(jid); return; }
-      if (btn.dataset.act === 'map') { openMapModal(jid); return; }
-      if (btn.dataset.act === 'pause') {
-        const paused = btn.textContent.trim() === 'Pause';
-        btn.disabled = true;
-        await api('/api/' + kind + '/' + encodeURIComponent(jid), { method: 'PATCH', body: { paused } });
-        /* N1a: optimistic in-place update, then re-sync */
-        const cell = tr.children[2];
-        if (cell) cell.innerHTML = paused ? '<span class="b b-warn">paused</span>' : '<span class="b b-ok">active</span>';
-        btn.textContent = paused ? 'Resume' : 'Pause';
-        btn.disabled = false;
-        toast(paused ? 'Paused — no posts mirrored while paused' : 'Resumed');
-        refreshChannels(kind);
-      } else {
-        const ok = await confirmModal('Remove channel?', `<b>${esc(chanName({ name: tr.children[0].textContent, jid }))}</b> will be removed from ${kind}. Posts already published stay where they are.`, 'Remove', true);
-        if (!ok) return;
-        await api('/api/' + kind + '/' + encodeURIComponent(jid), { method: 'DELETE' });
-        tr.remove(); // N1a: in-place removal
-        toast('Removed', 'ok', { label: 'Undo', fn: () => toast('Re-add it from the picker to undo', '') });
-        refreshChannels(kind);
+      if(btn.dataset.act==='rules'){await openRulesModal(jid);return;}
+      if(btn.dataset.act==='map'){await openMapModal(jid);return;}
+      if(btn.dataset.act==='pause') {
+        const paused=btn.textContent.trim()==='Pause';btn.disabled=true;
+        await api('/api/'+kind+'/'+encodeURIComponent(jid),{method:'PATCH',body:{paused}});
+        const synced=await refreshChannels(kind);
+        if(synced)toast(paused?'Paused — new work for this channel is stopped; in-flight work may finish':'Resumed');
+        else {btn.textContent='Refresh required';toast('Saved response received, but current channel state could not be reloaded. Refresh before further changes.','err');}
+      } else if(btn.dataset.act==='del') {
+        const ok=await confirmModal('Remove channel?',`<b>${esc(chanName({name:tr.children[0].textContent,jid}))}</b> will be removed from ${kind}. Posts already published stay where they are.`, 'Remove', true);
+        if(!ok)return;btn.disabled=true;
+        await api('/api/'+kind+'/'+encodeURIComponent(jid),{method:'DELETE'});
+        const synced=await refreshChannels(kind);
+        if(synced)toast('Removed','ok');else {btn.textContent='Refresh required';toast('Removal response received, but the list could not be reloaded. Refresh before further changes.','err');}
       }
-    } catch (e) { toast(e.message, 'err'); btn.disabled = false; }
+    } catch(e) {
+      if(btn.dataset.act==='pause'||btn.dataset.act==='del') {
+        const synced=await refreshChannels(kind);
+        if(synced)toast('The change could not be confirmed; the current channel list was reloaded.','err');
+        else {btn.disabled=true;btn.textContent='Refresh required';toast('Channel state is unknown. Refresh when connected before retrying.','err');}
+      } else toast(e.message,'err');
+    }
   });
 }
+
 /* per-source target mapping modal (uses the N2 picker pattern inline) */
 async function openMapModal(jid) {
-  const [srcRes, tgtRes] = await Promise.all([api('/api/sources'), api('/api/targets')]);
-  const src = (srcRes.list || []).find((s) => s.jid === jid);
+  const [srcRes, tgtRes] = await Promise.all([api('/api/source-rules?jid='+encodeURIComponent(jid)), api('/api/targets')]);
+  const src = srcRes.source;
   const targets = tgtRes.list || [];
   if (!src) return toast('Source not found', 'err');
   const mapped = String(src.targets || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -1384,10 +1452,10 @@ async function openMapModal(jid) {
 /* 5A (R38): the per-source rule card — approve first, active hours (PKT),
    daily cap + auto-pause, keyword include/exclude, priority. */
 async function openRulesModal(jid) {
-  const [srcRes, rules] = await Promise.all([api('/api/sources'), api('/api/source-rules')]);
-  const src = (srcRes.list || []).find((s) => s.jid === jid);
+  const detail=await api('/api/source-rules?jid='+encodeURIComponent(jid));
+  const src=detail.source;
   if (!src) return toast('Source not found', 'err');
-  const r = (rules.list || []).find((x) => x.source_jid === jid) || {};
+  const r=detail.rule || {};
   const m = openModal({
     title: 'Rule card — ' + chanLbl(src.name, jid), icon: ico('sliders'),
     html: `
@@ -1427,55 +1495,55 @@ async function openRulesModal(jid) {
     }
   });
 }
+const sourcePage = { rows:[], page:0, size:50, generation:0 };
+function sourcePageSet(rows) {
+  sourcePage.rows=rows.slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  const active=rows.filter(r=>!r.paused&&(!r.kind||r.kind==='wa')).length,notice=$('#srcScaleNotice');
+  notice.hidden=active<450;notice.textContent=active>=450 ? `At least ${Math.round(active*2/60)} minutes are needed for one paced pull pass across ${active} active WhatsApp sources, excluding network time. Live subscriptions and recovery are best-effort; posts can be missed.` : '';
+  sourcePageDraw();
+}
+function sourcePageDraw() {
+  const q=$('#srcSearch').value.trim().toLowerCase();
+  const hits=sourcePage.rows.filter(c=>!q||String(c.name||'').toLowerCase().includes(q)||String(c.jid||'').toLowerCase().includes(q));
+  const pages=Math.max(1,Math.ceil(hits.length/sourcePage.size));sourcePage.page=Math.max(0,Math.min(sourcePage.page,pages-1));
+  const start=sourcePage.page*sourcePage.size,shown=hits.slice(start,start+sourcePage.size);
+  $('#srcTable tbody').innerHTML=shown.length ? channelRows(shown,'sources') : `<tr><td colspan="6" class="muted">${sourcePage.rows.length ? 'No matching sources.' : 'No sources yet. Follow or add a channel to begin.'}</td></tr>`;
+  $('#srcPageInfo').textContent=hits.length ? `Showing ${start+1}–${start+shown.length} of ${hits.length} sources` : (sourcePage.rows.length ? 'No matching sources' : 'No sources yet');
+  $('#srcPrev').disabled=sourcePage.page===0;$('#srcNext').disabled=sourcePage.page>=pages-1;
+  const generation=++sourcePage.generation;paintSubs(generation).catch(()=>{});
+}
+$('#srcSearch').addEventListener('input',()=>{sourcePage.page=0;sourcePageDraw();});
+$('#srcPrev').addEventListener('click',()=>{sourcePage.page--;sourcePageDraw();});
+$('#srcNext').addEventListener('click',()=>{sourcePage.page++;sourcePageDraw();});
 loaders.sources = async () => {
-  $('#srcTable tbody').innerHTML = skelRows(3, 6);
-  const [d, p] = await Promise.all([api('/api/sources'), api('/api/power')]);
-  if ((d.list || []).length) {
-    $('#srcTable tbody').innerHTML = channelRows(d.list, 'sources');
-  } else {
-    /* v7.7.3: emptyRow() paints the cell itself — assigning its (undefined)
-       return value used to render the literal string "undefined" in the table */
-    await emptyRow($('#srcTable tbody'), 'radio', 'No sources yet', 'follow a channel on your phone and it appears here automatically (Auto-monitor) — usually within a few minutes of linking. Still empty? Press Refresh top-right to check with WhatsApp now, or re-link in the WhatsApp tab', 6);
-  }
-  $('#srcCount').textContent = (d.list || []).length;
-  $('#automonitor').checked = !!p.automonitor;
-  refreshPicker('sources');
-  paintSubs(); // 5I (I1): subscriber counts + 14-day growth sparkline (best-effort)
-  srcFollowedBanner(d.followedMissing || []); // v7.9: followed → one click into Sources
+  $('#srcTable tbody').innerHTML=skelRows(3,6);
+  const [d,p]=await Promise.all([api('/api/sources'),api('/api/power')]);
+  sourcePageSet(d.list||[]);$('#srcCount').textContent=(d.list||[]).length;
+  $('#automonitor').checked=!!p.automonitor;$('#automonitor').disabled=false;$('#automonitor').indeterminate=false;
+  refreshPicker('sources');srcFollowedBanner(d.followedMissing||[]);
 };
 /* v7.9: channels this account follows on WhatsApp that are not in Sources yet
    → a list above the table (works whether or not Auto-monitor is on).
    v7.10: "Add all" removed on owner request — each channel gets its own Add
    button; the owner picks exactly which followed channels become Sources. */
+const followedPage = {rows:[],page:0};
 function srcFollowedBanner(missing) {
-  let box = document.getElementById('srcSyncBanner');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'srcSyncBanner';
-    box.className = 'src-sync-banner';
-    const host = document.querySelector('#srcTable') && document.querySelector('#srcTable').closest('.card-b');
-    if (host) host.prepend(box); else return;
+  let box=document.getElementById('srcSyncBanner');
+  if(!box){box=document.createElement('div');box.id='srcSyncBanner';box.className='src-sync-banner';const host=document.querySelector('#srcTable')?.closest('.card-b');if(!host)return;host.prepend(box);}
+  followedPage.rows=missing;
+  function draw(){
+    const rows=followedPage.rows;if(!rows.length){box.hidden=true;return;}box.hidden=false;
+    const pages=Math.ceil(rows.length/50);followedPage.page=Math.max(0,Math.min(followedPage.page,pages-1));
+    const start=followedPage.page*50,visible=rows.slice(start,start+50);
+    box.innerHTML=`<div class="ssb-head">You follow <b>${rows.length}</b> WhatsApp channel(s) that aren't in Sources yet — add the ones you want:</div>
+      <div class="ssb-list">${visible.map(m=>`<div class="ssb-row" data-jid="${esc(m.jid)}"><span class="ssb-name" title="${esc(m.jid)}">${esc(chanLbl(m.name,m.jid))}</span><button class="btn btn-sm btn-p" data-add="${esc(m.jid)}">Add</button></div>`).join('')}</div>
+      <div class="source-page-controls"><button type="button" class="btn btn-sm" data-follow-prev ${followedPage.page===0?'disabled':''}>Previous</button><span role="status" aria-live="polite">${start+1}–${start+visible.length} of ${rows.length}</span><button type="button" class="btn btn-sm" data-follow-next ${followedPage.page===pages-1?'disabled':''}>Next</button></div>`;
+    box.querySelector('[data-follow-prev]').onclick=()=>{followedPage.page--;draw()};box.querySelector('[data-follow-next]').onclick=()=>{followedPage.page++;draw()};
+    $$('[data-add]',box).forEach(btn=>btn.addEventListener('click',async()=>{btn.disabled=true;btn.textContent='Adding…';try{await api('/api/browse/add-source',{method:'POST',body:{jid:btn.dataset.add}});toast('Added to Sources','ok');followedPage.rows=followedPage.rows.filter(row=>row.jid!==btn.dataset.add);draw();loaders.sources().catch(()=>{});}catch(e){toast(e.message,'err');btn.disabled=false;btn.textContent='Add';}}));
   }
-  if (!missing.length) { box.hidden = true; return; }
-  box.hidden = false;
-  box.innerHTML = `<div class="ssb-head">You follow <b>${missing.length}</b> WhatsApp channel(s) that aren't in Sources yet — add the ones you want:</div>
-    <div class="ssb-list">${missing.map((m) => `
-      <div class="ssb-row" data-jid="${esc(m.jid)}">
-        <span class="ssb-name" title="${esc(m.jid)}">${esc(chanLbl(m.name, m.jid))}</span>
-        <button class="btn btn-sm btn-p" data-add="${esc(m.jid)}">Add</button>
-      </div>`).join('')}</div>`;
-  $$('.ssb-row [data-add]', box).forEach((b) => b.addEventListener('click', async (ev) => {
-    const btn = ev.currentTarget; const row = btn.closest('.ssb-row');
-    btn.disabled = true; btn.textContent = 'Adding…';
-    try {
-      await api('/api/browse/add-source', { method: 'POST', body: { jid: b.dataset.add } });
-      toast('Added to Sources', 'ok');
-      if (row) row.remove();
-      if (!box.querySelector('.ssb-row')) box.hidden = true;
-      loaders.sources().catch(() => { });
-    } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = 'Add'; }
-  }));
+  draw();
 }
+
 /* v7.10: the background directory auto-rescan (added v7.9) is REMOVED on
    owner request — it made the Sources tab look like it refreshed by itself.
    Everything is manual now: press Refresh to re-check follow state with
@@ -1484,12 +1552,15 @@ function srcFollowedBanner(missing) {
 /* 5I (I1): fill the Subscribers column from /api/subs — count + tiny sparkline.
    Best-effort: WhatsApp may not return the number yet; the cell then says so. */
 let __subsCache = null;
-async function paintSubs() {
+async function paintSubs(generation) {
   const cells = $$('#srcTable [data-subcell]');
   if (!cells.length) return;
-  try { __subsCache = await api('/api/subs'); } catch { return; }
+  const query=new URLSearchParams();cells.forEach(c=>query.append('jid',c.dataset.subcell));
+  let response;try { response=await api('/api/subs?'+query.toString()); } catch { return; }
+  if(generation!==sourcePage.generation)return;
+  __subsCache=response;const byJid=new Map((response.list || []).map(row=>[row.jid,row]));
   for (const c of cells) {
-    const row = (__subsCache.list || []).find((x) => x.jid === c.dataset.subcell);
+    const row = byJid.get(c.dataset.subcell);
     if (!row || row.subs == null) {
       c.innerHTML = '<span class="mut tiny">no snapshot yet</span><div class="subs-day">updates daily, best-effort</div>';
       continue;
@@ -1497,7 +1568,7 @@ async function paintSubs() {
     const hist = (row.history || []).filter((h) => h.count != null);
     const delta = hist.length >= 2 ? row.subs - hist[0].count : 0;
     const spark = hist.length >= 2 ? sparklineSVG(hist.map((h) => h.count)) : '';
-    c.innerHTML = `<span class="subs-num num">${fmtNum(row.subs)}</span>${spark}<div class="subs-day">${row.subsDay || ''} · ${delta >= 0 ? '+' : ''}${delta} since ${hist[0] ? hist[0].day.slice(5) : ''}</div>`;
+    c.innerHTML = `<span class="subs-num num">${fmtNum(row.subs)}</span>${spark}<div class="subs-day">${esc(row.subsDay || '')} · ${delta >= 0 ? '+' : ''}${delta} since ${esc(hist[0] ? hist[0].day.slice(5) : '')}</div>`;
   }
 }
 function sparklineSVG(vals) {
@@ -1513,7 +1584,8 @@ function sparklineSVG(vals) {
 }
 loaders.targets = async () => {
   $('#tgtTable tbody').innerHTML = skelRows(3, 5);
-  const d = await api('/api/targets');
+  const [d, settings] = await Promise.all([api('/api/targets'), api('/api/power')]);
+  $('#autoTarget').checked = !!settings.autoTarget; $('#autoTarget').disabled = false; $('#autoTarget').indeterminate = false;
   if ((d.list || []).length) {
     $('#tgtTable tbody').innerHTML = channelRows(d.list, 'targets');
   } else {
@@ -1570,9 +1642,15 @@ pickers.targets = mountPicker($('#tgtPicker'), {
     refreshChannels('targets');
   }
 });
+$('#autoTarget').addEventListener('change', async (ev) => {
+  const control=ev.target,desired=control.checked;control.disabled=true;
+  try{await api('/api/settings',{method:'POST',body:{autoTarget:desired}});toast(desired?'Automatic target selection ON for the next first connection':'Automatic target selection OFF');control.disabled=false;}
+  catch(e){try{const state=await api('/api/settings');control.checked=!!state.autoTarget;control.disabled=false;toast('The change could not be confirmed; current settings were reloaded.','err');}catch{control.indeterminate=true;toast('Target selection setting is unknown. Refresh when connected.','err');}}
+});
 $('#automonitor').addEventListener('change', async (ev) => {
-  try { await api('/api/settings', { method: 'POST', body: { automonitor: ev.target.checked } }); toast(ev.target.checked ? 'Auto-monitor ON — new follows become sources' : 'Auto-monitor OFF'); }
-  catch (e) { toast(e.message, 'err'); ev.target.checked = !ev.target.checked; }
+  const control=ev.target,desired=control.checked;control.disabled=true;
+  try{await api('/api/settings',{method:'POST',body:{automonitor:desired}});toast(desired?'Auto-monitor ON — new follows become sources':'Auto-monitor OFF');control.disabled=false;}
+  catch(e){try{const state=await api('/api/settings');control.checked=!!state.automonitor;control.disabled=false;toast('The change could not be confirmed; current settings were reloaded.','err');}catch{control.indeterminate=true;toast('Auto-monitor setting is unknown. Refresh when connected.','err');}}
 });
 
 /* ── 12 · POWER (switches + scheduler + routing + prompts) ──────── */
@@ -1652,13 +1730,10 @@ function paintSwitches(p) {
         <div class="s-txt"><div class="s-name">${sw.name}</div><div class="s-desc">${sw.desc}</div></div>
         <label class="sw" title="${sw.desc.replace(/"/g, '&quot;')}"><input type="checkbox" data-key="${k}" ${p.switches[k] ? 'checked' : ''} title="${sw.desc.replace(/"/g, '&quot;')}"><i></i></label>
       </div>`).join('');
-    $$('input[data-key]', box).forEach((input) => input.addEventListener('change', async (ev) => {
-      ev.target.disabled = true;
-      try {
-        await api('/api/power/toggle', { method: 'POST', body: { key: ev.target.dataset.key, on: ev.target.checked } });
-        toast(`${SWITCHES[ev.target.dataset.key].name} ${ev.target.checked ? 'ON' : 'OFF'}`, 'ok');
-      } catch (e) { toast(e.message, 'err'); ev.target.checked = !ev.target.checked; }
-      ev.target.disabled = false;
+    $$('input[data-key]',box).forEach(input=>input.addEventListener('change',async(ev)=>{
+      const control=ev.target,key=control.dataset.key,desired=control.checked;control.disabled=true;
+      try{const result=await api('/api/power/toggle',{method:'POST',body:{key,on:desired}});__powerCache={...(__powerCache||p),switches:result.switches};control.checked=!!result.switches[key];control.disabled=false;paintSwitchChips(__powerCache);toast(`${SWITCHES[key].name} ${control.checked?'ON':'OFF'}`,'ok');}
+      catch(e){try{__powerCache=await api('/api/power');paintSwitches(__powerCache);toast('Switch change could not be confirmed; current state reloaded.','err');}catch{control.disabled=true;control.indeterminate=true;toast('Switch state is unknown. Refresh when connected.','err');}}
     }));
   }
   paintSwitchChips(p); /* read-only chips elsewhere refresh with the same payload */
@@ -1706,45 +1781,61 @@ function paintSwitchChips(p) {
 }
 /* ── 5A (R39) · ROUTING MATRIX — tri-state cells, saved in place ─────
    · default (from mapping)  →  ● ON (forced)  →  ○ OFF (forced)  →  default  */
-let __mtx = { sources: [], targets: [], cells: {} };
+let __mtx = {sources:[],targets:[],cells:{},pending:new Set(),unknown:new Set(),spage:0,tpage:0};
 async function renderMatrix() {
-  const box = $('#matrixBox');
-  if (!box) return;
+  const box=$('#matrixBox');if(!box)return;
   try {
-    const d = await api('/api/routing-matrix');
-    __mtx = { sources: d.sources || [], targets: d.targets || [], cells: {} };
-    for (const c of d.cells || []) __mtx.cells[c.source_jid + '|' + c.target_jid] = Boolean(c.enabled);
-    if (!__mtx.sources.length || !__mtx.targets.length) {
-      box.innerHTML = '<p class="muted tiny">Add source and target channels first — the grid appears here automatically.</p>';
-      return;
-    }
-    box.innerHTML = `<div class="tw"><table class="t mtx">
-      <thead><tr><th>Source ↓ / Target →</th>${__mtx.targets.map((t) => `<th class="mtx-h" title="${esc(t.jid)}">${esc(chanLbl(t.name, t.jid).slice(0, 10))}</th>`).join('')}</tr></thead>
-      <tbody>${__mtx.sources.map((s) => `<tr>
-        <td class="mtx-src" title="${esc(s.jid)}">${esc(chanLbl(s.name, s.jid))}</td>
-        ${__mtx.targets.map((t) => matrixCell(s.jid, t.jid, t.name)).join('')}
-      </tr>`).join('')}</tbody></table></div>
-      <p class="muted tiny" style="margin-top:10px">Click a cell to cycle: <b>· default</b> (mapping behavior) → <b class="b b-ok">ON</b> forced → <b class="b b-warn">OFF</b> forced → back to default. Every click saves immediately.</p>`;
-    $$('.mtx-c', box).forEach((b) => b.addEventListener('click', () => {
-      const key = b.dataset.s + '|' + b.dataset.t;
-      const cur = __mtx.cells[key];
-      const next = cur === undefined ? true : cur === true ? false : undefined; // def → ON → OFF → def
-      if (next === undefined) delete __mtx.cells[key]; else __mtx.cells[key] = next;
-      paintMatrixCell(b, next);
-      api('/api/routing-matrix', { method: 'POST', body: { cells: [{ source_jid: b.dataset.s, target_jid: b.dataset.t, enabled: next === undefined ? null : next }] } })
-        .then(() => toast(next === undefined ? 'Back to mapping default' : next ? 'Forced ON' : 'Forced OFF', 'ok', { label: 'Undo', fn: () => { b.click(); } }))
-        .catch((e) => toast(e.message, 'err'));
-    }));
-  } catch (e) { box.innerHTML = `<p class="muted tiny">Matrix not loaded: ${esc(e.message)}</p>`; }
+    const d=await api('/api/routing-matrix');
+    __mtx.sources=d.sources||[];__mtx.targets=d.targets||[];__mtx.cells={};__mtx.unknown.clear();
+    for(const c of d.cells||[])__mtx.cells[c.source_jid+'|'+c.target_jid]=Boolean(c.enabled);
+    __mtx.spage=0;__mtx.tpage=0;
+    if(!__mtx.sources.length||!__mtx.targets.length){box.innerHTML='<p class="muted tiny">Add source and target channels first — the grid appears here automatically.</p>';return;}
+    box.innerHTML=`<div class="matrix-controls"><label>Search sources <input class="in" type="search" data-matrix-source></label><button type="button" class="btn btn-sm" data-matrix-sprev>Previous</button><span data-matrix-scount role="status" aria-live="polite"></span><button type="button" class="btn btn-sm" data-matrix-snext>Next</button><label>Search targets <input class="in" type="search" data-matrix-target></label><button type="button" class="btn btn-sm" data-matrix-tprev>Previous</button><span data-matrix-tcount role="status" aria-live="polite"></span><button type="button" class="btn btn-sm" data-matrix-tnext>Next</button></div><div class="tw" tabindex="0" role="region" aria-label="Routing matrix"><table class="t mtx" data-matrix-grid></table></div><p class="muted tiny">Click to cycle default → ON → OFF → default. Changes save immediately; check state after an interrupted connection.</p>`;
+    const get=k=>box.querySelector('[data-matrix-'+k+']');
+    get('source').addEventListener('input',()=>{__mtx.spage=0;drawMatrix(box)});get('target').addEventListener('input',()=>{__mtx.tpage=0;drawMatrix(box)});
+    get('sprev').addEventListener('click',()=>{__mtx.spage--;drawMatrix(box)});get('snext').addEventListener('click',()=>{__mtx.spage++;drawMatrix(box)});
+    get('tprev').addEventListener('click',()=>{__mtx.tpage--;drawMatrix(box)});get('tnext').addEventListener('click',()=>{__mtx.tpage++;drawMatrix(box)});
+    drawMatrix(box);
+  }catch(e){box.innerHTML=`<p class="muted tiny">Matrix not loaded: ${esc(e.message)}</p>`;}
 }
-function matrixCell(s, t, tname) {
-  const v = __mtx.cells[s + '|' + t];
-  return `<td><button class="mtx-c ${v === true ? 'on' : v === false ? 'off' : 'def'}" data-s="${esc(s)}" data-t="${esc(t)}" title="${esc(tname || t)}: ${v === true ? 'forced ON' : v === false ? 'forced OFF' : 'default'}">${v === true ? 'ON' : v === false ? 'OFF' : '·'}</button></td>`;
+function drawMatrix(box){
+  const get=k=>box.querySelector('[data-matrix-'+k+']');
+  const filter=(rows,q)=>rows.filter(r=>!q||String(r.name||'').toLowerCase().includes(q)||String(r.jid||'').toLowerCase().includes(q));
+  const ss=filter(__mtx.sources,get('source').value.trim().toLowerCase()),tt=filter(__mtx.targets,get('target').value.trim().toLowerCase());
+  const pages=n=>Math.max(1,Math.ceil(n/25));__mtx.spage=Math.max(0,Math.min(__mtx.spage,pages(ss.length)-1));__mtx.tpage=Math.max(0,Math.min(__mtx.tpage,pages(tt.length)-1));
+  const si=__mtx.spage*25,ti=__mtx.tpage*25,src=ss.slice(si,si+25),tgt=tt.slice(ti,ti+25);
+  get('scount').textContent=ss.length?`${si+1}–${si+src.length} of ${ss.length}`:'0 of 0';get('tcount').textContent=tt.length?`${ti+1}–${ti+tgt.length} of ${tt.length}`:'0 of 0';
+  get('sprev').disabled=__mtx.spage===0;get('snext').disabled=__mtx.spage>=pages(ss.length)-1;get('tprev').disabled=__mtx.tpage===0;get('tnext').disabled=__mtx.tpage>=pages(tt.length)-1;
+  const grid=get('grid');
+  if(!src.length||!tgt.length){grid.innerHTML='<tbody><tr><td>No matching sources or targets.</td></tr></tbody>';return;}
+  grid.innerHTML=`<thead><tr><th scope="col">Source ↓ / Target →</th>${tgt.map(t=>`<th scope="col" class="mtx-h" title="${esc(t.jid)}">${esc(chanLbl(t.name,t.jid))}</th>`).join('')}</tr></thead><tbody>${src.map(r=>`<tr><th scope="row" class="mtx-src" title="${esc(r.jid)}">${esc(chanLbl(r.name,r.jid))}</th>${tgt.map(t=>matrixCell(r,t)).join('')}</tr>`).join('')}</tbody>`;
+  $$('.mtx-c',grid).forEach(button=>button.addEventListener('click',()=>{
+    const key=button.dataset.s+'|'+button.dataset.t;if(__mtx.pending.has(key)||__mtx.unknown.has(key))return;
+    const current=__mtx.cells[key],next=current===undefined?true:current===true?false:undefined;
+    saveMatrixCell(box,button,next,current,false);
+  }));
 }
-function paintMatrixCell(b, v) {
-  b.className = 'mtx-c ' + (v === true ? 'on' : v === false ? 'off' : 'def');
-  b.textContent = v === true ? 'ON' : v === false ? 'OFF' : '·';
-  b.title = (b.title || '').split(':')[0] + ': ' + (v === true ? 'forced ON' : v === false ? 'forced OFF' : 'default');
+function matrixCell(source,target){
+  const s=source.jid,t=target.jid,key=s+'|'+t,v=__mtx.cells[key],pending=__mtx.pending.has(key),unknown=__mtx.unknown.has(key);
+  const labelS=chanLbl(source.name,s),labelT=chanLbl(target.name,t),state=unknown?'unknown':pending?'saving':v===true?'forced ON':v===false?'forced OFF':'default';
+  return `<td><button class="mtx-c ${v===true?'on':v===false?'off':'def'}" data-s="${esc(s)}" data-t="${esc(t)}" data-source-label="${esc(labelS)}" data-target-label="${esc(labelT)}" aria-label="${esc(labelS)} to ${esc(labelT)}: ${state}" title="${esc(labelT)}: ${state}"${pending||unknown?' disabled':''}>${unknown?'?':pending?'…':v===true?'ON':v===false?'OFF':'·'}</button></td>`;
+}
+function matrixPaint(button,v,state){
+  button.className='mtx-c '+(v===true?'on':v===false?'off':'def');button.disabled=state==='pending'||state==='unknown';button.textContent=state==='pending'?'…':state==='unknown'?'?':v===true?'ON':v===false?'OFF':'·';
+  const label=state==='pending'?'saving':state==='unknown'?'unknown':v===true?'forced ON':v===false?'forced OFF':'default';
+  button.title=button.dataset.targetLabel+': '+label;button.setAttribute('aria-label',button.dataset.sourceLabel+' to '+button.dataset.targetLabel+': '+label);
+}
+async function saveMatrixCell(box,button,next,previous,undo){
+  const key=button.dataset.s+'|'+button.dataset.t;
+  if(!button.isConnected){toast('The view changed; refresh before undoing.','err');return;}
+  if(__mtx.pending.has(key)||__mtx.unknown.has(key))return;
+  __mtx.pending.add(key);matrixPaint(button,previous,'pending');
+  const updateVisible=(value,state)=>{const grid=box.querySelector('[data-matrix-grid]');if(!grid)return;$$('.mtx-c',grid).filter(b=>b.dataset.s===button.dataset.s&&b.dataset.t===button.dataset.t).forEach(b=>matrixPaint(b,value,state));};
+  try{
+    await api('/api/routing-matrix',{method:'POST',body:{cells:[{source_jid:button.dataset.s,target_jid:button.dataset.t,enabled:next===undefined?null:next}]}});
+    __mtx.pending.delete(key);if(next===undefined)delete __mtx.cells[key];else __mtx.cells[key]=next;updateVisible(next,'confirmed');
+    if(!undo)toast(next===undefined?'Back to mapping default':next?'Forced ON':'Forced OFF','ok',{label:'Undo',fn:()=>saveMatrixCell(box,button,previous,next,true)});
+  }catch(e){__mtx.pending.delete(key);__mtx.unknown.add(key);updateVisible(previous,'unknown');toast('Routing state is unknown. Refresh before retrying.','err');}
 }
 
 /* ── 5A (R45) · MONTH CALENDAR of scheduled runs ─────────────────── */
@@ -1982,7 +2073,7 @@ loaders.approvals = async () => {
     failedBox.innerHTML = `<div class="es">${s}<div class="es-t">No failed posts</div><div class="es-s">Failures stay here until retried or dismissed; check delivery review before retrying.</div></div>`;
   }
   let rec = null; try { rec = JSON.parse(d.recovery || 'null'); } catch (e) { }
-  $('#recoveryNote').textContent = rec ? `Last boot recovery pass (${when(rec.at)}): ${rec.fed || 0} missed post(s) re-fed → ${rec.recovered || 0} published, ${rec.queued || 0} queued, ${rec.failed || 0} failed, ${rec.skipped || 0} skipped.` : 'Recovery results appear here after the bot reconnects and runs its catch-up pass.';
+  $('#recoveryNote').textContent = rec ? `Last recovery pass (${when(rec.at)}): ${rec.fed || 0} candidate post(s) submitted. Outcomes are not attributed to this pass; check history. Recovery uses limited samples and may miss posts.` : 'A recovery summary appears here after the bot reconnects. Recovery is best-effort and may miss posts.';
 };
 async function queueIdForPost(postId) {
   try {
@@ -2290,6 +2381,7 @@ function tplWire() {
       $('#tplStyleInput').value = cur.styles[id] || '';
       $('#tplStyleTarget').textContent = (cur.list.find((x) => x.id === id) || {}).name || id;
       window.__tplStyleId = id;
+      window.showWorkspaceElement?.($('#tplStyleInput'));
       $('#tplStyleInput').scrollIntoView({ block: 'center' });
     }
   });
@@ -2363,7 +2455,7 @@ const composeRefresh = () => {
   $('#composePreview').innerHTML = waRender(t);
   const n = t.length;
   const c = $('#composeCount');
-  c.textContent = n + ' chars' + (n > 4096 ? ' — will auto-split into ' + Math.ceil(n / 4096) + ' labeled parts' : '');
+  c.textContent = n + ' chars' + (n > 4096 ? ' — will be split into numbered parts' : '');
   c.style.color = n > 4096 ? 'var(--warn, #f0a020)' : '';
 };
 $('#composeText').addEventListener('input', composeRefresh);
@@ -2496,7 +2588,7 @@ $('#composeTestSend').addEventListener('click', async () => {
   btn.classList.add('is-loading');
   try {
     await api('/api/compose/test-send', { method: 'POST', body: { phone: $('#composeTestPhone').value, text } });
-    toast('Test sent to your number — open WhatsApp to check the formatting', 'ok');
+    toast('Request accepted — check WhatsApp for delivery and formatting', 'ok');
   } catch (e) { toast(e.message, 'err'); }
   btn.classList.remove('is-loading');
 });
@@ -2534,14 +2626,15 @@ loaders.newpost = async () => {
   if (!pickers.compose) {
     pickers.compose = mountPicker($('#composePicker'), {
       kind: 'targets', mode: 'multi', listFrom: 'targets', preselect: 'all', showChecked: 'all',
-      placeholder: 'All active targets (untick to narrow)',
-      onPick: async () => { pickers.compose.refresh(); } // composer applies on publish, not on pick
+      placeholder: 'Choose active targets',
+      onPick: async () => true // selection is applied on publish
     });
   }
   refreshPicker('compose');
   composeRefresh();
   loadSnippets();
   renderDrafts();
+  loadTelegram();
   loadLibPrompts(); // 5C (R55)
 };
 /* 5C (R55): prompt library in the composer */
@@ -2572,35 +2665,158 @@ $('#libPromptGo').addEventListener('click', async () => {
   } catch (e) { toast(e.message, 'err'); }
   btn.classList.remove('is-loading');
 });
+const COMPOSE_REQUEST_KEY='raq-compose-pending-v1';
+function composePending(){try{return JSON.parse(sessionStorage.getItem(COMPOSE_REQUEST_KEY)||'null')}catch{return null}}
+function composePaintPending(){const p=composePending();$('#composeNewRequest').hidden=!p;if(p)$('#composeResult').textContent='Result not confirmed: a prior request may still be in progress. Review its outcome before starting a different send.';}
+$('#composeNewRequest').addEventListener('click',async()=>{if(await confirmModal('Start a new publish request?', '<p>Check the channel and Delivery review first. A new request may duplicate a post whose result is unknown.</p>', 'I checked — start a new request',true)){sessionStorage.removeItem(COMPOSE_REQUEST_KEY);$('#composeResult').textContent='Prior request cleared in this tab.';composePaintPending();}});
+composePaintPending();
+let composePublishing = false;
 $('#composeSend').addEventListener('click', async () => {
-  const text = $('#composeText').value.trim();
-  const imageUrl = $('#composeImage').value.trim();
-  if (!text && !imageUrl && !composeUpload) return toast('Write a post, add an image URL or upload a photo');
-  /* targets: what is ticked in the picker (incl. pre-checked existing targets);
-     nothing ticked = all active */
-  let targets = [];
+  if (composePublishing) return;
+  const text = $('#composeText').value.trim(), imageUrl = $('#composeImage').value.trim();
+  const photo = composeUpload ? {...composeUpload} : null, beautify = $('#composeBeautify').checked;
+  if (!text && !imageUrl && !photo) return toast('Write a post, add an image URL or upload a photo', 'err');
+  if (text.length > 60000) return toast('Post text must be 60,000 characters or less', 'err');
+  composePublishing = true;
+  const btn = $('#composeSend'); btn.disabled = true; btn.classList.add('is-loading');
   try {
-    const tg = await api('/api/targets');
-    const active = (tg.list || []).filter((t) => !t.paused).map((t) => t.jid);
-    const picked = pickers.compose ? pickers.compose.selected(true) : null;
-    targets = (picked && picked.length) ? picked : active;
-  } catch (e) { targets = []; }
-  const btn = $('#composeSend');
-  btn.classList.add('is-loading');
-  $('#composeResult').textContent = 'Publishing…';
-  try {
-    const r = await api('/api/compose', { method: 'POST', body: { text, imageUrl, beautify: $('#composeBeautify').checked, targets, imageB64: composeUpload ? composeUpload.b64 : '', imageMime: composeUpload ? composeUpload.mime : '' } });
-    if (!r.complete) {
-      $('#composeResult').textContent = `Needs review: ${r.sent} part(s) accepted; ${r.failed} issue(s). Check Approval queue → Live before any retry. ${(r.errors || []).join(' | ')}`;
-      toast('Send incomplete or uncertain — check Delivery review before retrying', 'err');
-    } else {
-      $('#composeResult').textContent = `Provider accepted ${r.sent} part(s); delivery not confirmed`;
-      toast('Accepted by provider', 'ok');
-      $('#composeText').value = ''; $('#composeImage').value = ''; composeUpload = null; $('#composeUploadClear').hidden = true; composeRefresh();
-    }
-  } catch (e) { $('#composeResult').textContent = ''; toast(e.message, 'err'); }
-  btn.classList.remove('is-loading');
+    let active;
+    try { const tg=await api('/api/targets'); active=(tg.list || []).filter(t=>!t.paused); }
+    catch { return toast('Could not verify targets. Try again before publishing.', 'err'); }
+    const picked = pickers.compose ? pickers.compose.selected(true) : [];
+    if (!picked.length) return toast('Select at least one active target before publishing', 'err');
+    if (picked.some(id=>!active.some(t=>t.jid===id))) return toast('A selected target is no longer active. Review your selection.', 'err');
+    const names=picked.map(id=>active.find(t=>t.jid===id)).map(t=>esc(chanName(t)));
+    const attachment=photo ? 'Uploaded photo' : imageUrl ? 'Image from the supplied URL' : 'No image';
+    const preview=esc(text || '(Image only)');
+    const html=`<p>Review this post and its <b>${picked.length} selected target${picked.length===1?'':'s'}</b>. Nothing is sent until you confirm.</p>
+      <div class="send-review-targets"><b>Targets</b><ul>${names.map(n=>`<li>${n}</li>`).join('')}</ul></div>
+      <div class="send-review-content"><b>Post text</b><div class="send-review-text" tabindex="0">${preview}</div></div>
+      <p><b>Attachment:</b> ${esc(attachment)}${text.length>4096 ? '<br>Long text will be split into numbered parts.' : ''}${beautify ? '<br><b>AI clean-up is on:</b> text will be sent to your configured AI provider and may change before publishing.' : ''}</p>
+      <p class="muted tiny">Provider acceptance does not confirm delivery. If an outcome is uncertain, inspect Delivery review before retrying.</p>`;
+    const confirmed=await confirmModal('Review before publishing',html,'Publish to selected targets',true);
+    if (!confirmed) { $('#composeResult').textContent='Publishing cancelled — your draft is unchanged.'; return; }
+    if(!globalThis.crypto?.randomUUID || !crypto.subtle) return toast('Use HTTPS or localhost to retain a secure request ID.','err');
+    const body={text,imageUrl,beautify,targets:picked,imageB64:photo?.b64 || '',imageMime:photo?.mime || ''};
+    const fingerprint=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(body))))).map(x=>x.toString(16).padStart(2,'0')).join('');
+    let pending=composePending();
+    if(pending && pending.fingerprint!==fingerprint)return toast('A previous request may still be in progress. Check its outcome before starting a different send.','err');
+    if(!pending) {pending={requestId:crypto.randomUUID(),fingerprint};try{sessionStorage.setItem(COMPOSE_REQUEST_KEY,JSON.stringify(pending));if(!composePending())throw Error();}catch{return toast('Could not retain the request ID. Nothing was sent.','err');}}
+    body.requestId=pending.requestId;composePaintPending();
+    $('#composeResult').textContent = 'Publishing…';
+    try {
+      const r=await api('/api/compose',{method:'POST',body});
+      sessionStorage.removeItem(COMPOSE_REQUEST_KEY);composePaintPending();
+      if (!r.complete) {
+        $('#composeResult').textContent=`Needs review: ${r.sent} part(s) accepted; ${r.failed} issue(s). Check Approval queue → Live before any retry. ${(r.errors||[]).join(' | ')}`;
+        toast('Send incomplete or uncertain — check Delivery review before retrying','err');
+      } else {
+        $('#composeResult').textContent=`Provider accepted ${r.sent} part(s); delivery not confirmed`;
+        toast('Accepted by provider','ok');
+        if ($('#composeText').value.trim()===text && $('#composeImage').value.trim()===imageUrl && (!photo || composeUpload?.b64===photo.b64)) {
+          $('#composeText').value=''; $('#composeImage').value=''; composeUpload=null; $('#composeUploadClear').hidden=true; composeRefresh();
+        }
+      }
+    } catch(e) { $('#composeResult').textContent='Result not confirmed — check Delivery review and history before retrying. Your draft is unchanged.'; toast('Send result not confirmed: '+e.message,'err');composePaintPending(); }
+  } finally { composePublishing=false; btn.disabled=false; btn.classList.remove('is-loading'); }
 });
+
+/* Optional Telegram manual channel publishing; never shares the WhatsApp
+   composer automatically. A pending request ID survives a tab reload. */
+const TELEGRAM_PENDING_KEY='raq-telegram-pending-v1', TELEGRAM_SCHEDULE_KEY='raq-telegram-schedule-v1';
+function telegramSchedulePending(){try{return sessionStorage.getItem(TELEGRAM_SCHEDULE_KEY)||'';}catch{return '';}}
+let telegramConfigured=false, telegramReviewing=false;
+function telegramPending() {try {return sessionStorage.getItem(TELEGRAM_PENDING_KEY)||'';}catch{return '';}}
+function telegramPaint() {
+  const pending=!!telegramPending();
+  $('#telegramSend').disabled=!telegramConfigured || pending || telegramReviewing;
+  $('#telegramCheck').hidden=!pending; $('#telegramClear').hidden=!pending;
+  const schedulePending=!!telegramSchedulePending();$('#telegramSchedule').disabled=!telegramConfigured||schedulePending||telegramReviewing;
+  $('#telegramScheduleCheck').hidden=!schedulePending;$('#telegramScheduleClear').hidden=!schedulePending;
+}
+async function loadTelegram() {
+  try {
+    const d=await api('/api/telegram');telegramConfigured=!!d.configured;
+    $('#telegramSetup').textContent=telegramConfigured ? 'Bot token configured on the server. Verify the channel before sending.' : 'Not configured. Set TELEGRAM_BOT_TOKEN in the server environment, then restart.';
+    const items=d.recent||[];
+    $('#telegramHistory').innerHTML=items.length ? '<ul>'+items.map(x=>`<li><b>${esc(x.channelTitle||x.target)}</b> — ${esc(x.state)} · ${esc(x.startedAt)}${x.providerId?' · message '+esc(x.providerId):''}</li>`).join('')+'</ul>' : 'No Telegram sends recorded.';
+  } catch(e) {telegramConfigured=false;$('#telegramSetup').textContent='Telegram status could not be loaded.';}
+  telegramPaint();
+  await loadTelegramSchedules();
+}
+async function loadTelegramSchedules(){
+  try {
+    const d=await api('/api/telegram/schedules');const list=d.list||[];
+    $('#telegramSchedules').innerHTML=list.length?'<ul>'+list.map(x=>`<li><b>${esc(x.target)}</b> · ${esc(new Date(x.sendAt).toLocaleString())} · ${esc(x.state)} ${x.state==='waiting'?`<button class="btn btn-g btn-sm" data-tg-cancel="${esc(x.id)}">Cancel schedule</button>`:''}<div>${esc(x.text)}</div>${x.detail?`<div>${esc(x.detail)}</div>`:''}</li>`).join('')+'</ul>':'No schedules recorded.';
+    $$('#telegramSchedules [data-tg-cancel]').forEach(button=>button.addEventListener('click',async()=>{
+      if(!await confirmModal('Cancel this Telegram schedule?', '<p>This prevents the waiting post from being sent. A send already in progress cannot be cancelled.</p>', 'Cancel schedule',true))return;
+      try{await api('/api/telegram/schedules/'+encodeURIComponent(button.dataset.tgCancel)+'/cancel',{method:'POST',body:{confirmed:true}});toast('Schedule cancelled','ok');await loadTelegramSchedules();}catch(e){toast(e.message,'err');await loadTelegramSchedules();}
+    }));
+  } catch {$('#telegramSchedules').textContent='Could not load Telegram schedules.';}
+}
+$('#telegramSend').addEventListener('click',async()=>{
+  if(telegramPending() || telegramReviewing)return;
+  telegramReviewing=true; telegramPaint();
+  try {
+  const target=$('#telegramTarget').value.trim(),text=$('#telegramText').value;
+  if(!target || !text.trim() || [...text].length>4096) return toast('Enter a channel and 1–4,096 characters of text.','err');
+  const html=`<p>Confirm the exact destination and text. This sends only to Telegram, not WhatsApp.</p><div class="send-review-targets"><b>Channel</b><p>${esc(target)}</p></div><div class="send-review-content"><b>Text</b><div class="send-review-text" tabindex="0">${esc(text)}</div></div><p>No attachment will be sent. Check the channel before retrying if the result is uncertain.</p>`;
+  if(!await confirmModal('Review Telegram post',html,'Send to Telegram',true))return;
+  if(!globalThis.crypto?.randomUUID)return toast('Use HTTPS or localhost for a secure send.','err');
+  const id=crypto.randomUUID();
+  try {sessionStorage.setItem(TELEGRAM_PENDING_KEY,id);if(telegramPending()!==id)throw Error();}
+  catch {return toast('This browser could not retain a request ID. Nothing was sent.','err');}
+  telegramPaint();$('#telegramResult').textContent='Sending to Telegram…';
+  try {
+    const result=await api('/api/telegram/publish',{method:'POST',body:{requestId:id,target,text,confirmed:true}});
+    const r=result.record;
+    if(!r)throw Error('No result was returned.');
+    $('#telegramResult').textContent=r.detail || 'This request is still running. Check its status before another send.';
+    if(r.state==='accepted' || r.state==='rejected') {sessionStorage.removeItem(TELEGRAM_PENDING_KEY);}
+    await loadTelegram();
+  } catch(e) {$('#telegramResult').textContent='The result is not confirmed. Check the last send and the destination channel before starting another request.';toast(e.message,'err');telegramPaint();}
+  } finally {telegramReviewing=false;telegramPaint();}
+});
+$('#telegramCheck').addEventListener('click',async()=>{
+  const id=telegramPending();if(!id)return;
+  try {
+    const d=await api('/api/telegram/requests/'+encodeURIComponent(id));const r=d.record;
+    $('#telegramResult').textContent=(r.detail || 'The request is still running. Check the channel before another send.')+' State: '+r.state+'.';
+    if(r.state==='accepted'||r.state==='rejected') sessionStorage.removeItem(TELEGRAM_PENDING_KEY);
+    await loadTelegram();
+  } catch(e) {$('#telegramResult').textContent='Could not verify this request. Check the destination channel before starting a new send.';toast(e.message,'err');}
+});
+$('#telegramClear').addEventListener('click',async()=>{
+  if(await confirmModal('Start a new Telegram send?', '<p>Check the destination channel and recent sends first. Starting a new request may duplicate a post whose result is unknown.</p>', 'I checked — start a new send',true)) {
+    sessionStorage.removeItem(TELEGRAM_PENDING_KEY);$('#telegramResult').textContent='Previous request cleared in this tab. Review the channel before sending.';telegramPaint();
+  }
+});
+$('#telegramSchedule').addEventListener('click',async()=>{
+  if(telegramSchedulePending() || telegramReviewing)return;
+  telegramReviewing=true; telegramPaint();
+  try {
+  const target=$('#telegramTarget').value.trim(),text=$('#telegramText').value,local=$('#telegramWhen').value;
+  const date=new Date(local);
+  if(!target||!text.trim()||[...text].length>4096||!local||!Number.isFinite(date.getTime())||date.getTime()<Date.now()+60000)return toast('Enter a channel, text and a time at least one minute from now.','err');
+  const at=date.toISOString(),zone=Intl.DateTimeFormat().resolvedOptions().timeZone || 'device local time';
+  const html=`<p>Confirm the channel, text and one-time schedule. The app must be running to send.</p><div class="send-review-targets"><b>Channel</b><p>${esc(target)}</p><b>Time</b><p>${esc(date.toLocaleString())} (${esc(zone)})<br>${esc(at)} UTC</p></div><div class="send-review-content"><b>Text</b><div class="send-review-text" tabindex="0">${esc(text)}</div></div><p>Nothing is sent now. An interrupted or uncertain send requires review, not an automatic retry.</p>`;
+  if(!await confirmModal('Review Telegram schedule',html,'Create schedule',true))return;
+  if(!globalThis.crypto?.randomUUID)return toast('Use HTTPS or localhost for a secure schedule.','err');
+  const id=crypto.randomUUID();try{sessionStorage.setItem(TELEGRAM_SCHEDULE_KEY,id);if(telegramSchedulePending()!==id)throw Error();}catch{return toast('Could not retain the request ID. No schedule was created.','err');}
+  telegramPaint();$('#telegramScheduleResult').textContent='Creating schedule…';
+  try{const d=await api('/api/telegram/schedules',{method:'POST',body:{requestId:id,target,text,sendAt:at,confirmed:true}});if(!d.record)throw Error('No schedule result returned.');sessionStorage.removeItem(TELEGRAM_SCHEDULE_KEY);$('#telegramScheduleResult').textContent='Schedule recorded: '+d.record.state+'.';await loadTelegram();}
+  catch(e){$('#telegramScheduleResult').textContent='Schedule result not confirmed. Check the request before creating another schedule.';toast(e.message,'err');telegramPaint();}
+  } finally {telegramReviewing=false;telegramPaint();}
+});
+$('#telegramScheduleCheck').addEventListener('click',async()=>{
+  const id=telegramSchedulePending();if(!id)return;
+  try{const d=await api('/api/telegram/schedules/'+encodeURIComponent(id));$('#telegramScheduleResult').textContent='Recorded schedule: '+d.record.state+'.';sessionStorage.removeItem(TELEGRAM_SCHEDULE_KEY);await loadTelegram();}
+  catch(e){$('#telegramScheduleResult').textContent='Could not verify this schedule request. Check schedules before starting another.';toast(e.message,'err');}
+});
+$('#telegramScheduleClear').addEventListener('click',async()=>{
+  if(await confirmModal('Start a new schedule?', '<p>Check the Telegram schedules list first. A new request can schedule the same post twice.</p>', 'I checked — start a new schedule',true)){sessionStorage.removeItem(TELEGRAM_SCHEDULE_KEY);$('#telegramScheduleResult').textContent='Previous schedule request cleared in this tab.';telegramPaint();}
+});
+loadTelegram();
 
 /* ── 15 · POSTS ─────────────────────────────────────────────────── */
 let __postsCache = [];   // 5B: loaded list, filters re-render client-side
@@ -2675,7 +2891,7 @@ async function handlePostAct(p, act, b) {
       primary: async () => {
         try {
           const r = await api('/api/posts/undo-row', { method: 'POST', body: { id: p.id, target } });
-          if (r.ok) { toast('Post deleted from the channel', 'ok'); loaders.posts(); }
+          if (r.ok) { toast(r.note || 'Deletion request accepted; check the channel to verify.', 'ok'); loaders.posts(); }
         } catch (e) { toast(e.message, 'err'); return false; }
       }
     });
@@ -2697,22 +2913,20 @@ async function handlePostAct(p, act, b) {
         composeRefresh();
         show('newpost');
         toast('Text loaded into the Composer — tweak and publish', 'ok');
-      } else if (act === 'edit') {
-        return; /* handled by the table-level delegated handler (channel edit) */
       } else if (act === 'republish') {
         openModal({
           title: 'Edit & republish',
           html: `<div class="muted tiny" style="margin-bottom:8px">Publish this text again to the targets this source is routed to right now. The original post stays where it is.</div>
-            <div class="field"><textarea class="in" id="repText" rows="8">${esc(String(p.body || ''))}</textarea></div>`
+            <div class="field"><label for="repText">Post text</label><textarea class="in" id="repText" rows="8">${esc(String(p.body || ''))}</textarea></div>`
         });
         $('#repText').addEventListener('keydown', (ev) => { if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') $('#repGo').click(); });
         const go = () => {
           const t = $('#repText').value.trim();
           if (!t) return toast('Nothing to publish', 'err');
-          go.disabled = true;
+          const button = $('#repGo'); if (button.disabled) return; button.disabled = true;
           api('/api/posts/edit-republish', { method: 'POST', body: { id: p.id, text: t } })
-            .then((r) => { if (r.ok) { closeModal(); toast(`Republished to ${r.sent} target(s)${r.failed ? ', ' + r.failed + ' failed' : ''}`, r.failed ? '' : 'ok'); loaders.posts(); } })
-            .catch((e) => { go.disabled = false; toast(e.message, 'err'); });
+            .then((r) => { if (r.ok) { closeModal(); toast(`${r.sent} part request(s) accepted${r.failed ? ', ' + r.failed + ' not confirmed' : ''}. Check targets.`, r.failed ? '' : 'ok'); loaders.posts(); } })
+            .catch(() => { toast('Result not confirmed. Check every target before starting another request.', 'err'); });
         };
         const goBtn = document.createElement('button');
         goBtn.className = 'btn btn-p'; goBtn.id = 'repGo'; goBtn.textContent = 'Publish again';
@@ -2723,17 +2937,17 @@ async function handlePostAct(p, act, b) {
         if (!key) return toast('No published message id stored', 'err');
         openModal({
           title: 'Channel edit',
-          html: `<div class="muted tiny" style="margin-bottom:8px">Edits the post as it appears on ${esc(p.source_name || 'the channel')}. Experimental — check the channel afterwards.</div>
-            <div class="field"><textarea class="in" id="edText" rows="8">${esc(String(p.body || ''))}</textarea></div>`
+          html: `<div class="muted tiny" style="margin-bottom:8px">Requests an edit on all recorded target copies. Experimental — verify every target channel afterwards.</div>
+            <div class="field"><label for="edText">Updated text</label><textarea class="in" id="edText" rows="8">${esc(String(p.body || ''))}</textarea></div>`
         });
         $('#edText').addEventListener('keydown', (ev) => { if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') $('#edGo').click(); });
         const go = () => {
           const t = $('#edText').value;
           if (!t.trim()) return toast('Text cannot be empty', 'err');
-          go.disabled = true;
-          api('/api/posts/edit', { method: 'POST', body: { id: p.id, target: key.target_jid, msg_id: key.msg_id, text: t } })
-            .then((r) => { if (r.ok) { closeModal(); toast('Channel post edited', 'ok'); loaders.posts(); } })
-            .catch((e) => { go.disabled = false; toast(e.message, 'err'); });
+          const button = $('#edGo'); if (button.disabled) return; button.disabled = true;
+          api('/api/posts/edit', { method: 'POST', body: { sourceJid: p.source_jid, sourceMsgId: p.source_msg_id, text: t } })
+            .then((r) => { closeModal(); toast(`${r.ok || 0} edit request(s) accepted; ${(r.errors || []).length} not confirmed. Check the channel.`, (r.errors || []).length ? '' : 'ok'); loaders.posts(); })
+            .catch((e) => { button.disabled = false; toast(e.message, 'err'); });
         };
         const goBtn = document.createElement('button');
         goBtn.className = 'btn btn-p'; goBtn.id = 'edGo'; goBtn.textContent = 'Apply edit';
@@ -2837,8 +3051,8 @@ $('#undoBtn').addEventListener('click', async () => {
   const ok = await confirmModal(`Delete the LAST post on ${name}?`, 'Only the most recent bot-published post on that target is deleted. Nothing else is touched.', 'Delete last post', true);
   if (!ok) return;
   try {
-    await api('/api/undo-last', { method: 'POST', body: { target_jid: sel.value } });
-    toast('Done — the last post is deleted from ' + name, 'ok');
+    const result = await api('/api/undo-last', { method: 'POST', body: { target_jid: sel.value } });
+    toast(result.note || 'Deletion request accepted; check the channel to verify.', 'ok');
   } catch (e) { toast(e.message, 'err'); }
 });
 function fillPurgeTarget(list) {
@@ -2848,28 +3062,6 @@ function fillPurgeTarget(list) {
   if (cur) sel.value = cur;
 }
 $('#postsRefresh').addEventListener('click', () => loaders.posts());
-$('#postsTable').addEventListener('click', async (ev) => {
-  const btn = ev.target.closest('button[data-act="edit"]');
-  if (!btn) return;
-  const tr = btn.closest('tr');
-  /* 5B: pre-fill from the stored post body (the Detail column only holds a 90-char reason) */
-  const pp = __postsCache.find((x) => String(x.id) === tr.dataset.pid);
-  const current = pp && String(pp.body || '').trim() ? String(pp.body) : (tr.children[4].textContent || '');
-  const m = openModal({
-    title: 'Edit published post', icon: ico('pencil'),
-    html: `<p class="muted tiny">The new text replaces the post on every target it was sent to (experimental — the WhatsApp edit may expire for very old posts).</p>
-      <div class="field" style="margin-top:12px"><textarea class="in" id="postEditText" rows="6"></textarea></div>`,
-    primaryLabel: 'Edit post',
-    primary: () => {
-      const text = $('#postEditText').value;
-      api('/api/posts/edit', { method: 'POST', body: { sourceJid: tr.dataset.sjid, sourceMsgId: tr.dataset.smid, text } })
-        .then((r) => toast(r.ok ? `Edited on ${r.ok} target(s)` : 'Edit failed', r.ok ? 'ok' : 'err'))
-        .catch((e) => toast(e.message, 'err'));
-      return false;
-    }
-  });
-  setTimeout(() => { const ta = m.querySelector('#postEditText'); ta.value = current; ta.focus(); }, 40);
-});
 $('#postsDelete').addEventListener('click', async () => {
   const sels = $$('.post-sel:checked');
   if (!sels.length) return toast('Select posts first (checkboxes)');
@@ -2884,7 +3076,7 @@ $('#purgeBtn').addEventListener('click', async () => {
   const jid = $('#purgeTarget').value;
   if (!jid) return toast('Pick a target channel');
   const tName = ($('#purgeTarget option:checked') || {}).textContent || '';
-  const ok = await confirmModal(`Delete ALL bot posts in “${tName}” for that date range?`, 'Every matching published post is deleted. This cannot be undone.', 'Delete range', true);
+  const ok = await confirmModal(`Delete ALL bot posts in “${tName}” for that date range?`, 'Only locally recorded bot-published copies are selected. The provider response does not prove deletion; check the channel afterwards. This cannot be undone.', 'Delete range', true);
   if (!ok) return;
   try {
     const r = await api('/api/posts/purge', { method: 'POST', body: { jid, from: $('#purgeFrom').value, to: $('#purgeTo').value } });
@@ -3086,13 +3278,13 @@ $('#panicBtn').addEventListener('click', () => {
     if (p.on) {
       openModal({
         title: 'Panic stop is active', icon: ico('shield'), danger: true, primary: true, primaryLabel: 'Restore previous state',
-        html: '<p>Everything is paused right now (mirroring, queue, scheduler, auto-replies, reports). Restore the previous state?</p>'
+        html: '<p>New mirroring, queue, scheduler, auto-reply and report actions are paused. In-flight requests may still complete. Review waiting jobs before restoring operation.</p>'
       , primary: () => api('/api/panic/restore', { method: 'POST', body: {} }).then(() => { toast('Panic stop restored — normal operation resumed', 'ok'); paintPanic(); }).catch((e) => { toast(e.message, 'err'); return false; }) });
     } else {
       openModal({
         title: 'Panic stop', icon: ico('shield'), danger: true, primary: true, primaryLabel: 'Pause everything',
-        html: '<p>Pause <b>everything</b> at once — mirroring, the approval queue, the scheduler, auto-replies and reports?</p><p>Nothing is lost: in-flight work stays queued, and the previous state (running or paused) is restored exactly when you restore.</p>'
-      , primary: () => api('/api/panic/stop', { method: 'POST', body: {} }).then(() => { toast('Panic stop engaged — everything paused', 'warn'); paintPanic(); }).catch((e) => { toast(e.message, 'err'); return false; }) });
+        html: '<p>Pause new mirroring, queue, scheduler, auto-reply and report actions?</p><p>Already-started provider requests cannot be recalled; their outcome may be unknown. Review waiting jobs before restoring operation.</p>'
+      , primary: () => api('/api/panic/stop', { method: 'POST', body: {} }).then(() => { toast('Panic stop engaged — new actions paused; in-flight requests may continue', 'warn'); paintPanic(); }).catch((e) => { toast(e.message, 'err'); return false; }) });
     }
   }).catch(() => { });
 });
@@ -3112,6 +3304,7 @@ api('/api/session').then((s) => {
 }).catch(() => { });
 
 /* R70: backup & restore (Settings) */
+$('#bkFullDownload').addEventListener('click',()=>{ location.href='/api/backup/full-download'; toast('Complete backup download started','ok'); });
 $('#bkDownload').addEventListener('click', () => { location.href = '/api/backup/download'; toast('Backup zip download started', 'ok'); });
 async function refreshPreRestore() {
   try {
@@ -3122,20 +3315,26 @@ async function refreshPreRestore() {
   } catch { }
 }
 $('#bkRestoreFile').addEventListener('change', async (ev) => {
-  const f = ev.target.files && ev.target.files[0];
-  const msg = $('#bkRestoreMsg');
-  ev.target.value = '';
+  const f=ev.target.files && ev.target.files[0], msg=$('#bkRestoreMsg'); ev.target.value='';
   if (!f) return;
-  if (!confirm(`Restore from "${f.name}"?\n\nThe current state is saved automatically as a pre-restore snapshot first, so you can always roll back. Your WhatsApp link and settings are replaced by the backup's.`)) return;
-  msg.textContent = 'Restoring…';
+  if (f.size > 200 * 1024 * 1024) { msg.textContent='Backup exceeds the 200 MB upload limit.'; return; }
+  msg.textContent='Inspecting backup — no changes made…';
   try {
-    const buf = await f.arrayBuffer();
-    const r = await api('/api/backup/restore', { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: buf });
-    msg.textContent = 'Restored ✓ (snapshot: ' + r.preRestore + ')';
-    toast('Backup restored — pre-restore snapshot kept', 'ok');
-    refreshPreRestore();
-    location.reload();
-  } catch (e) { msg.textContent = ''; toast(e.message, 'err'); }
+    const buf=await f.arrayBuffer();
+    const report=await api('/api/backup/preview',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf});
+    const replaced=report.tables.filter(t=>t.action==='replace'), preserved=report.tables.filter(t=>t.action==='preserve');
+    const rows=report.tables.map(t=>`<tr><td>${esc(t.name)}</td><td>${t.current}</td><td>${t.incoming===null?'—':t.incoming}</td><td>${t.action==='preserve'?'Keep current table':'Replace current table'}${t.missingColumns.length?' (some newer columns reset to defaults)':''}</td></tr>`).join('');
+    msg.textContent='Preview ready — no changes made.';
+    const html=`<p><b>${esc(f.name)}</b> is valid. This will replace data in ${replaced.length} table(s) and preserve ${preserved.length} table(s) absent from this backup.</p>
+      <p>Engage panic stop and keep an independent backup first. In-flight work cannot be recalled; an offline recovery is safer. Database settings and keys may be replaced. WhatsApp session files and held-media files are <b>not</b> included or restored by this database backup.</p>
+      <div class="restore-preview-table" tabindex="0" role="region" aria-label="Backup restore table comparison"><table class="t" tabindex="0" aria-label="Backup restore table comparison"><thead><tr><th>Table</th><th>Current rows</th><th>Backup rows</th><th>Restore effect</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="muted tiny">After restore, panic stop remains active and mirroring stays paused even after panic is cleared. Review all waiting jobs before resuming. A local pre-restore snapshot can be lost on restart; verify your independent backup.</p>`;
+    if (!await confirmModal('Review database restore',html,'Replace database contents',true)) { msg.textContent='Restore cancelled — no changes made.'; return; }
+    msg.textContent='Restoring…';
+    const r=await api('/api/backup/restore',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Backup-SHA256':report.sha256,'X-Restore-Confirmed':'true'},body:buf});
+    msg.textContent='Restored with panic stop active (snapshot: '+r.preRestore+'). Review queued work before resuming.'; toast('Backup restored; panic stop remains active','warn');
+    refreshPreRestore(); location.reload();
+  } catch(e) { msg.textContent='Backup was not restored.'; toast(e.message,'err'); }
 });
 refreshPreRestore();
 
@@ -3198,12 +3397,16 @@ async function loadStorage(refresh) {
       kpi('Database', mb(s.db.bytes || 0), (s.rows.posts || 0) + ' posts · ' + (s.rows.logs || 0) + ' log lines'),
       kpi('Media (hold)', mb(s.mediaHold.bytes || 0), s.mediaHold.files + ' file(s)' + (s.mediaHold.oldest ? ' · oldest ' + when(s.mediaHold.oldest) : '')),
       kpi('Avatars', mb(s.avatars.bytes || 0), s.avatars.files + ' file(s)'),
+      ...(s.disk ? [kpi('Available disk (estimate)', mb(s.disk.available), 'Filesystem only; host quotas may differ')] : []),
       kpi('Pre-restore snapshots', mb(s.preRestore.bytes || 0), s.preRestore.files + ' kept (last 5)')
     ].join('');
     renderGhGauge(s.github);
     /* v9.0.0 (repo-slim): the "keep the repo small" box */
     if ($('#slimKeepDays')) $('#slimKeepDays').value = s.keepDays || 30;
+    if ($('#slimAutoPrune')) $('#slimAutoPrune').checked = !!s.autoPrune;
+    if ($('#slimDeletePublished')) $('#slimDeletePublished').checked = !!s.deletePublishedMedia;
     if ($('#slimInboxNow')) $('#slimInboxNow').textContent = s.inboxMedia ? (s.inboxMedia.files + ' file(s) · ' + humanBytes(s.inboxMedia.bytes || 0) + ' on disk') : '';
+    if(s.cloud && s.cloud.writeBlocked) {const det=$('#ghGaugeDetail'); if(det) det.textContent='Cloud writes are blocked: saved state could not be verified. Preserve your backup and follow the recovery guide.';}
     if (s.cloud && s.cloud.skips) {
       const det = $('#ghGaugeDetail');
       if (det && det.textContent) det.textContent += ' · ' + s.cloud.skips + ' unchanged sync(s) skipped';
@@ -3226,10 +3429,12 @@ $('#slimCompact').addEventListener('click', async () => {
 $('#slimKeepSave').addEventListener('click', async () => {
   const days = Math.max(1, Math.min(365, Number($('#slimKeepDays').value) || 30));
   $('#slimKeepDays').value = days;
+  const autoPrune=$('#slimAutoPrune').checked, deletePublished=$('#slimDeletePublished').checked;
+  if ((autoPrune || deletePublished) && !await confirmModal('Enable automatic media deletion?', '<p>This can permanently delete saved media. Enabling age-based cleanup immediately removes media older than the selected age; deleting published media removes local copies after a successful publish.</p><p>Keep and verify an independent backup before continuing.</p>', 'Enable selected deletion', true)) return;
   const b = $('#slimKeepSave');
   b.disabled = true;
   try {
-    const r = await api('/api/storage/keepdays', { method: 'POST', body: { days } });
+    const r = await api('/api/storage/keepdays', { method: 'POST', body: { days, autoPrune, deletePublished, confirmed:true } });
     toast(r.detail || 'Saved', 'ok');
     loadStorage();
   } catch (e) { toast(e.message, 'err'); }
@@ -3240,10 +3445,10 @@ $('#ghGaugeRefresh').addEventListener('click', () => {
   b.disabled = true;
   loadStorage(true).finally(() => { b.disabled = false; });
 });
-function cleanup(kind, what) {
+async function cleanup(kind, what) {
   const days = Math.max(1, Math.min(365, Number($('#clDays').value) || 30));
-  if (!confirm(`Clean ${what} older than ${days} day(s)? Published posts, settings and credentials are never touched.`)) return;
-  api('/api/storage/cleanup', { method: 'POST', body: { kind, days } })
+  if (!await confirmModal('Clean stored data?',`<p>Permanently remove ${esc(what)} older than ${days} days? Keep a verified backup. Published posts, settings and credentials are not deleted by this action.</p>`,'Delete selected data',true)) return;
+  api('/api/storage/cleanup', { method: 'POST', body: { kind, days, confirmed:true } })
     .then((r) => { toast(r.detail || 'Done', 'ok'); loadStorage(); })
     .catch((e) => toast(e.message, 'err'));
 }
@@ -3712,40 +3917,57 @@ function bcListModal(l) {
     } catch (e) { toast(e.message, 'err'); }
   });
 }
-function bcSendModal(l) {
-  const m = openModal({
-    title: `Send to “${l.name}” (${l.count} recipients)`,
-    icon: ico('megaphone'),
-    html: `<p class="muted tiny f-help">Same pacing as the bulk sender — 1.5 s apart. <b>{name}</b> is replaced per recipient.</p>
-      <div class="field" style="margin-top:12px"><textarea class="in" id="bcText" rows="6" placeholder="Salam {name}! …"></textarea></div>
-      <div class="row-actions" style="margin-top:12px"><button class="btn btn-p" id="bcGo">Send to list</button></div>`,
-    primary: null
-  });
-  $('#bcGo').addEventListener('click', async () => {
-    const text = $('#bcText').value.trim();
-    if (!text) { toast('Write the message first.', 'err'); return; }
-    const ok = await confirmModal(`Send to all ${l.count} recipients?`, 'This posts the message to every person in the list, paced 1.5 s apart.', 'Send to all', true);
-    if (!ok) return;
-    try {
-      const r = await api('/api/broadcast/' + l.id + '/send', { method: 'POST', body: { text } });
-      closeModal(); toast(`Sent ${r.sent}/${r.total} from list “${l.name}”`, r.sent === r.total ? 'ok' : '');
-      loaders.bulk();
-    } catch (e) { toast(e.message, 'err'); }
+// Bulk delivery requires a deliberate review and acknowledgement of consent.
+function confirmBulkSend(title, recipients, text) {
+  let done=false;
+  return new Promise(resolve=>{
+    const finish=v=>{if(!done){done=true;resolve(v);}};
+    openModal({title,danger:true,primaryLabel:'Send to recipients',
+      html:`<p>Review the exact list and message. Invalid numbers or group IDs are rejected before any send.</p>
+        <b>Recipients</b><div class="send-review-text" tabindex="0">${esc(recipients)}</div>
+        <b>Message</b><div class="send-review-text" tabindex="0">${esc(text)}</div>
+        <p>Messages are paced and may still be restricted by WhatsApp. Provider acceptance is not proof of delivery.</p>
+        <label class="bulk-consent"><input type="checkbox" id="bulkConsent"> I have permission from every recipient to receive this message.</label>
+        <div id="bulkConsentError" class="tiny" role="alert"></div>`,
+      primary:()=>{if(!$('#bulkConsent').checked){$('#bulkConsentError').textContent='Confirm recipient permission before sending.';$('#bulkConsent').focus();return false;}finish(true);},
+      onClose:()=>finish(false)
+    });
   });
 }
-$('#bulkSendBtn').addEventListener('click', async () => {
-  const ok = await confirmModal('Send this bulk message?', 'It goes to every recipient in the list, paced 1.5 s apart. WhatsApp can flag large fast sends — keep the list reasonable.', 'Send to all', true);
-  if (!ok) return;
-  const btn = $('#bulkSendBtn');
-  btn.classList.add('is-loading');
-  $('#bulkResult').textContent = 'Sending (paced 1.5 s per recipient)…';
+function bcSendModal(l, initialText='') {
+  openModal({
+    title:`Send to “${l.name}” (${l.count} recipients)`, icon:ico('megaphone'),
+    html:`<p class="muted tiny f-help">Personal contacts only. {name} is replaced per recipient.</p>
+      <div class="field" style="margin-top:12px"><textarea aria-label="Message to saved list" class="in" id="bcText" rows="6" placeholder="Salam {name}! …"></textarea></div>
+      <div class="row-actions" style="margin-top:12px"><button class="btn btn-p" id="bcGo">Review message</button></div>`, primary:null
+  });
+  $('#bcText').value=initialText;
+  $('#bcGo').addEventListener('click',async()=>{
+    const text=$('#bcText').value.trim(); if(!text) return toast('Write the message first.','err');
+    const ok=await confirmBulkSend(`Review list “${l.name}”`,l.recipients || '',text);
+    if(!ok) { bcSendModal(l,text); return; }
+    try {
+      const r=await api('/api/broadcast/'+l.id+'/send',{method:'POST',body:{text,consentConfirmed:true}});
+      toast(`Provider accepted ${r.sent}/${r.total} from “${l.name}”; delivery not confirmed. Check Delivery review for uncertain outcomes.`,r.sent===r.total?'ok':'err');
+      loaders.bulk();
+    } catch(e) { toast(e.message,'err');bcSendModal(l,text); }
+  });
+}
+let bulkPublishing=false;
+$('#bulkSendBtn').addEventListener('click',async()=>{
+  if(bulkPublishing) return;
+  const recipients=$('#bulkTo').value.trim(),text=$('#bulkText').value.trim();
+  if(!recipients || !text) return toast('Enter recipients and a message first.','err');
+  bulkPublishing=true;const btn=$('#bulkSendBtn');btn.disabled=true;
   try {
-    const r = await api('/api/bulk', { method: 'POST', body: { recipients: $('#bulkTo').value, text: $('#bulkText').value } });
-    $('#bulkResult').innerHTML = `<b style="color:var(--ok)">Delivered ${r.sent}/${r.total}</b>` + (r.results || []).filter((x) => !x.ok).map((x) => `<br><span style="color:var(--err)">${esc(x.to)}: ${esc(x.error)}</span>`).join('');
-    toast(`Bulk send: ${r.sent}/${r.total}`, r.sent === r.total ? 'ok' : '');
-    loaders.bulk();
-  } catch (e) { $('#bulkResult').textContent = ''; toast(e.message, 'err'); }
-  btn.classList.remove('is-loading');
+    if(!await confirmBulkSend('Review bulk message',recipients,text)) return;
+    btn.classList.add('is-loading');$('#bulkResult').textContent='Sending with pacing…';
+    try {
+      const r=await api('/api/bulk',{method:'POST',body:{recipients,text,consentConfirmed:true}});
+      $('#bulkResult').innerHTML=`<b>Provider accepted ${r.sent}/${r.total}; delivery is not confirmed.</b>`+(r.results||[]).filter(x=>!x.ok).map(x=>`<br><span style="color:var(--err)">${esc(x.to)}: ${esc(x.error)}</span>`).join('');
+      toast(`Provider accepted ${r.sent}/${r.total}; delivery not confirmed.`,r.sent===r.total?'ok':'err');loaders.bulk();
+    } catch(e) { $('#bulkResult').textContent='Bulk send did not complete. Check Delivery review before retrying.';toast(e.message,'err'); }
+  } finally { btn.disabled=false;btn.classList.remove('is-loading');bulkPublishing=false; }
 });
 /* email */
 const EM_PRESETS = { gmail: 'https://myaccount.google.com/apppasswords', icloud: 'https://appleid.apple.com/account/manage', custom: '' };
@@ -3757,20 +3979,26 @@ $('#emProvider').addEventListener('change', () => {
   $('#emCustomRow').hidden = p !== 'custom';
 });
 $('#emAdd').addEventListener('click', async () => {
-  const btn = $('#emAdd'); btn.classList.add('is-loading');
+  const btn = $('#emAdd'); if(btn.disabled)return;btn.disabled=true;btn.classList.add('is-loading');
   try {
     await api('/api/email/accounts', { method: 'POST', body: { provider: $('#emProvider').value, label: $('#emLabel').value, user: $('#emUser').value, pass: $('#emPass').value, host: $('#emHost').value, port: $('#emPort').value } });
     toast('Email account connected — press Test to verify it sends', 'ok');
     $('#emPass').value = ''; $('#emUser').value = ''; $('#emLabel').value = '';
     loaders.email();
   } catch (e) { toast(e.message, 'err'); }
-  btn.classList.remove('is-loading');
+  btn.disabled=false;btn.classList.remove('is-loading');
 });
 loaders.email = async () => {
   $('#emAccTable tbody').innerHTML = skelRows(2, 3);
   $('#emQueueTable tbody').innerHTML = skelRows(2, 4);
   $('#emHistTable tbody').innerHTML = skelRows(2, 5);
   const [acc, hist] = await Promise.all([api('/api/email/accounts'), api('/api/email/history')]);
+  const sec=acc.security || {}, vaultText={
+    plaintext:'SMTP passwords are stored unencrypted. Optional protection requires a separately managed key; see the deployment guide.',
+    mixed:`${Number(sec.encrypted)||0} SMTP password(s) protected; ${Number(sec.plaintext)||0} still stored unencrypted. Use the offline migration guide.`,
+    protected:'SMTP password encryption is enabled. Backups and other application data remain sensitive and may be unencrypted.',
+    locked:'SMTP credential key is missing, incorrect or damaged. Sending is blocked; check the credential recovery guide.'
+  };$('#emVaultStatus').textContent=vaultText[sec.mode] || 'Credential storage status unavailable; check the deployment guide.';
   $('#emFrom').innerHTML = (acc.list || []).length
     ? acc.list.map((a) => `<option value="${esc(a.id)}" ${a.isDefault ? 'selected' : ''}>${esc(a.label)} — ${esc(a.user)}</option>`).join('')
     : '<option value="">— connect an account above —</option>';
@@ -3787,14 +4015,14 @@ loaders.email = async () => {
   $('#emQueueTable tbody').innerHTML = (hist.queue || []).map((q) => `
     <tr data-qid="${esc(q.id)}">
       <td class="tiny num">${esc(q.at)}</td><td>${esc(q.subject || '(no subject)')}</td>
-      <td><span class="b b-info">${esc(q.status)}</span></td>
-      <td><div class="ra"><button class="btn btn-sm btn-d" data-act="cancel">Cancel</button></div></td>
+      <td><span class="b b-info">${esc(q.status)}</span>${q.error?`<div class="muted tiny">${esc(q.error)}</div>`:''}<details><summary>Intended recipients</summary><div class="send-review-text" tabindex="0">${esc(q.to_list)}</div></details>${(q.attempts||[]).length?`<details><summary>Recipient outcomes</summary><ul>${q.attempts.map(a=>`<li>${esc(a.recipient)}: ${esc(a.state)}${a.detail?' — '+esc(a.detail):''}</li>`).join('')}</ul></details>`:''}</td>
+      <td><div class="ra">${q.status==='pending'?'<button class="btn btn-sm btn-d" data-act="cancel">Cancel</button>':''}${q.status==='needs_review'||q.status==='failed'?'<button class="btn btn-sm" data-act="review">Mark reviewed…</button>':''}</div></td>
     </tr>`).join('') || (await emptyTCell('calendar', 'Nothing scheduled', 'timed emails queue here', 4));
   $('#emHistTable tbody').innerHTML = (hist.list || []).map((h) => `
     <tr>
       <td class="tiny num">${when(h.ts)}</td><td class="muted tiny">${esc(h.account)}</td>
       <td class="tiny">${esc(h.to_addr)}</td><td class="tiny">${esc(h.subject)}</td>
-      <td>${h.ok ? '<span class="b b-ok">sent</span>' : `<span class="b b-err" title="${esc(h.error || '')}">failed</span>`}</td>
+      <td>${h.ok ? '<span class="b b-ok">accepted</span>' : `<span class="b b-err" title="${esc(h.error || '')}">outcome unknown</span>`}</td>
     </tr>`).join('') || (await emptyTCell('mail-open', 'No emails sent yet', 'history of sent emails', 5));
 };
 $('#emAccTable').addEventListener('click', async (ev) => {
@@ -3819,28 +4047,55 @@ $('#emAccTable').addEventListener('click', async (ev) => {
     }
   } catch (e) { toast(e.message, 'err'); }
 });
+const EMAIL_REQUEST_KEY='raq-email-pending-v1';
+function emailPending(){try{return JSON.parse(sessionStorage.getItem(EMAIL_REQUEST_KEY)||'null')}catch{return null}}
+function emailPaint(){const p=emailPending();$('#emRequestCheck').hidden=!p;$('#emRequestNew').hidden=!p;if(p)$('#emRequestResult').textContent='Result not confirmed. Check this request and recipient history before sending again.';}
+$('#emRequestCheck').addEventListener('click',async()=>{
+  const pending=emailPending();if(!pending)return;
+  try{const d=await api('/api/email/requests/'+encodeURIComponent(pending.requestId));const r=d.record;
+    if(r.state==='completed'){sessionStorage.removeItem(EMAIL_REQUEST_KEY);emailPaint();$('#emRequestResult').textContent=r.result?.queued?'Email request recorded in the queue. Check its status below.':`Email request completed: SMTP accepted ${r.result?.sent || 0}/${r.result?.total || 0}; check history and recipients.`;loaders.email();}
+    else $('#emRequestResult').textContent='Request state: '+r.state+'. Check recipients and history before starting a new request.';
+  }catch(e){$('#emRequestResult').textContent='Could not verify this request. Check recipients and history before starting a new request.';toast(e.message,'err');}
+});
+$('#emRequestNew').addEventListener('click',async()=>{if(await confirmModal('Start a new email request?','<p>Check the previous request, email history and recipients first. A new request can duplicate an email whose outcome is unknown.</p>','I checked — start a new request',true)){sessionStorage.removeItem(EMAIL_REQUEST_KEY);emailPaint();$('#emRequestResult').textContent='Previous request cleared in this tab.';}});
+emailPaint();
+let emailReviewing=false;
 async function emSend(scheduled) {
-  const body = { accountId: $('#emFrom').value, to: $('#emTo').value, subject: $('#emSubject').value, body: $('#emBody').value };
-  if (scheduled) {
-    const v = $('#emWhen').value;
-    if (!v) return toast('Pick a date & time first');
-    body.scheduleAt = new Date(v).toISOString();
-  }
+  if(emailReviewing)return;emailReviewing=true;
   try {
-    const r = await api('/api/email/send', { method: 'POST', body });
-    toast(r.queued ? (r.note || 'Queued') : `Sent ${r.sent}/${r.total}`, 'ok');
-    if (!scheduled) { $('#emTo').value = ''; $('#emSubject').value = ''; $('#emBody').value = ''; }
-    $('#emWhen').value = '';
-    loaders.email();
-  } catch (e) { toast(e.message, 'err'); }
+    const body={accountId:$('#emFrom').value,to:$('#emTo').value,subject:$('#emSubject').value,body:$('#emBody').value};
+    if(!body.to.trim() || (!body.subject.trim()&&!body.body.trim()))return toast('Enter recipients and a subject or message.','err');
+    const from=$('#emFrom').selectedOptions[0]?.textContent || 'No account selected';
+    let time='Now';
+    if(scheduled){const v=$('#emWhen').value,d=new Date(v);if(!v||!Number.isFinite(d.getTime()))return toast('Pick a valid date and time first.','err');body.scheduleAt=d.toISOString();time=`${d.toLocaleString()} (${body.scheduleAt} UTC)`;}
+    const html=`<p>Review the recipients and message. Only send to people who have agreed to receive it.</p><p><b>From:</b> ${esc(from)}</p><b>Recipients</b><div class="send-review-text" tabindex="0">${esc(body.to)}</div><p><b>Subject:</b> ${esc(body.subject||'(no subject)')}</p><b>Message</b><div class="send-review-text" tabindex="0">${esc(body.body)}</div><p><b>Time:</b> ${esc(time)}</p><p>SMTP acceptance does not prove delivery. For an uncertain result, check recipients before sending again.</p>`;
+    if(!await confirmModal(scheduled?'Review scheduled email':'Review email',html,scheduled?'Schedule email':'Send email',true))return;
+    if(!globalThis.crypto?.randomUUID || !crypto.subtle)return toast('Use HTTPS or localhost to retain a secure request ID.','err');
+    const fingerprint=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(body))))).map(x=>x.toString(16).padStart(2,'0')).join('');
+    let pending=emailPending();if(pending && pending.fingerprint!==fingerprint)return toast('Check the previous email request before sending different content.','err');
+    if(!pending){pending={requestId:crypto.randomUUID(),fingerprint};try{sessionStorage.setItem(EMAIL_REQUEST_KEY,JSON.stringify(pending));if(!emailPending())throw Error();}catch{return toast('Could not retain the email request ID. Nothing was sent.','err');}}
+    body.requestId=pending.requestId;emailPaint();$('#emRequestResult').textContent='Submitting email request…';
+    try {
+      const r=await api('/api/email/send',{method:'POST',body});
+      sessionStorage.removeItem(EMAIL_REQUEST_KEY);emailPaint();$('#emRequestResult').textContent='Request recorded. Check email history and any items needing review.';
+      if(r.queued){toast(r.note||'Queued','ok');$('#emWhen').value='';}
+      else if(r.complete){toast(`SMTP accepted ${r.sent}/${r.total}; delivery not confirmed`,'ok');$('#emTo').value='';$('#emSubject').value='';$('#emBody').value='';}
+      else toast(`Email needs review: SMTP accepted ${r.sent}/${r.total}. Check history before another send.`,'err');
+      loaders.email();
+    } catch(e){emailPaint();toast('Result not confirmed: '+e.message+'. Check email history before sending again.','err');}
+  } finally {emailReviewing=false;}
 }
 $('#emSendNow').addEventListener('click', () => emSend(false));
 $('#emSchedule').addEventListener('click', () => emSend(true));
 $('#emQueueTable').addEventListener('click', async (ev) => {
-  const btn = ev.target.closest('button[data-act="cancel"]');
-  if (!btn) return;
-  try { await api(`/api/email/queue/${btn.closest('tr').dataset.qid}/cancel`, { method: 'POST' }); toast('Cancelled'); loaders.email(); }
-  catch (e) { toast(e.message, 'err'); }
+  const btn=ev.target.closest('button[data-act]');if(!btn)return;const id=btn.closest('tr').dataset.qid;
+  if(btn.dataset.act==='cancel') {
+    if(!await confirmModal('Cancel this scheduled email?','<p>A pending email will not be sent. An email already in progress cannot be cancelled here.</p>','Cancel scheduled email',true))return;
+    try{await api(`/api/email/queue/${encodeURIComponent(id)}/cancel`,{method:'POST',body:{confirmed:true}});toast('Scheduled email cancelled','ok');loaders.email();}catch(e){toast(e.message,'err');loaders.email();}
+  } else if(btn.dataset.act==='review') {
+    if(!await confirmModal('Mark email outcome reviewed?','<p>Check each recipient and the email history first. This removes the item from the review list; it does not resend anything.</p>','I checked — mark reviewed',true))return;
+    try{await api(`/api/email/queue/${encodeURIComponent(id)}/reviewed`,{method:'POST',body:{confirmed:true}});toast('Marked reviewed','ok');loaders.email();}catch(e){toast(e.message,'err');loaders.email();}
+  }
 });
 
 /* ── 19 · JOURNAL · HEALTH · LOGS ───────────────────────────────── */
@@ -3967,13 +4222,13 @@ async function updateAiProviderUi(keepModel) {
   link.textContent = `Get ${p.name || 'API'} key →`;
   link.style.display = p.keyUrl ? '' : 'none';
   const wantKeep = keepModel !== undefined ? keepModel : (id === (window.__aiProviderShown) ? $('#aiModel').value : '');
-  fillModelSelect(p.models || [], wantKeep || (p.models || [])[0] || '', `Loading ${(p.models || []).length} built-in starter model(s) (Oct 2026) — fetching ${p.name || 'provider'}'s live list…`);
+  fillModelSelect(p.models || [], wantKeep || (p.models || [])[0] || '', `Loading ${(p.models || []).length} built-in starter model(s) — fetching ${p.name || 'provider'}'s live list…`);
   window.__aiProviderShown = id;
   try {
     const d = await api('/api/ai/models?provider=' + encodeURIComponent(id));
     if (id !== $('#aiProvider').value) return;
     const note = d.live
-      ? `OK — ${d.list.length} live model(s) read straight from ${d.name} — this is the authoritative list.`
+      ? `OK — ${d.list.length} live model(s) read straight from ${d.name} — filtered or cached; account access and pricing may differ.`
       : `Warning — live list from ${d.name} could not be read (${d.error || 'unknown reason'}) — showing ${d.list.length} built-in starter model(s) instead. Fix the key and press “Fetch live model list”.`;
     fillModelSelect(d.list, d.default || keepModel, note);
   } catch (e) { /* built-ins already shown */ }
@@ -3986,7 +4241,7 @@ function updateAiKeyLine(ai) {
   const has = ai.keyStatus ? Boolean(ai.keyStatus[id]) : (id === ai.provider ? ai.hasKey : false);
   $('#aiKey').placeholder = has ? '•••••••• ' + name + ' key saved — type a new key to replace it' : 'No ' + name + ' key saved yet — paste one here';
   line.textContent = has
-    ? 'Saved — the ' + name + ' key is stored. Each AI keeps its OWN key — switch providers freely, no need to re-paste anything.'
+    ? 'Saved — the ' + name + ' key is stored in the database without encryption. Restrict access to state and backups.'
     : 'Missing — no key saved for ' + name + ' yet. What you paste is stored only for ' + name + '.';
   line.style.color = has ? '' : 'var(--warn)';
 }
@@ -3999,7 +4254,7 @@ $('#aiModelRefresh').addEventListener('click', async () => {
     const d = await api('/api/ai/models?provider=' + encodeURIComponent($('#aiProvider').value) + '&refresh=1');
     fillModelSelect(d.list, $('#aiModel').value || d.default, d.live
       ? `OK — ${d.list.length} live model(s) straight from ${d.name} — pick one and press Save AI settings.`
-      : `Note — ${d.name} did not return a live list (${d.error || 'unknown reason'}). Showing ${d.list.length} built-in starter model(s) (Oct 2026) — these are a fallback. If the key is correct, ${d.name} may be temporarily unreachable; try again in a minute.`);
+      : `Note — ${d.name} did not return a live list (${d.error || 'unknown reason'}). Showing ${d.list.length} built-in starter model(s) — these are a fallback. If the key is correct, ${d.name} may be temporarily unreachable; try again in a minute.`);
     toast(d.live ? `${d.list.length} models loaded` : 'Showing built-in models', d.live ? 'ok' : '');
   } catch (e) { toast(e.message, 'err'); }
   btn.classList.remove('is-loading');
@@ -4264,7 +4519,7 @@ $('#aiChatClear').addEventListener('click', async () => {
     if (open) { try { loaders.aichat(); } catch (e) {} inp.focus(); }
   };
   fab.addEventListener('click', () => { if (suppressClick) { suppressClick = false; return; } toggle(); });
-  fab.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') toggle(); });
+  fab.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } });
   $('#robotClose').addEventListener('click', (ev) => { ev.stopPropagation(); toggle(false); });
   /* v7.10: the 8-second auto-reload is REMOVED on owner request — the panel
      only reloads when opened, after each send, or via the manual Refresh
@@ -4372,15 +4627,25 @@ $('#aiChatClear').addEventListener('click', async () => {
     const chev = document.createElement('span');
     chev.className = 'chev';
     chev.innerHTML = '<svg class="icon icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-    header.appendChild(chev);
-    const open = saved[id] != null ? saved[id] : !DEFAULT_CLOSED.has(id);
-    if (!open) card.classList.add('collapsed');
+    const label = header.cloneNode(true);
+    label.querySelectorAll('button,input,select,a,svg,.muted').forEach(el=>el.remove());
+    const name = label.textContent.replace(/\s+/g,' ').trim().slice(0,80) || 'section';
+    const toggle = document.createElement('button'); toggle.type='button'; toggle.className='chev-button';
+    body.id=body.id || 'card-body-' + id.replace(/[^a-zA-Z0-9_-]/g,'-');
+    if (id === 'logs.1') { body.tabIndex=0; body.setAttribute('role','region'); body.setAttribute('aria-label','Scrollable logs'); }
+    toggle.setAttribute('aria-controls',body.id); toggle.appendChild(chev); header.appendChild(toggle);
+    function setExpanded(expanded, persist) {
+      card.classList.toggle('collapsed', !expanded);
+      toggle.setAttribute('aria-expanded',String(expanded));
+      toggle.setAttribute('aria-label',(expanded ? 'Collapse ' : 'Expand ') + name);
+      if (persist) { saved[id]=expanded; try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {} }
+    }
+    card.__setExpanded=setExpanded;
+    setExpanded(saved[id] != null ? saved[id] : !DEFAULT_CLOSED.has(id), false);
+    toggle.addEventListener('click',()=>setExpanded(card.classList.contains('collapsed'),true));
     header.addEventListener('click', (ev) => {
       if (ev.target.closest('button, input, select, a, label')) return;
-      const nowOpen = !card.classList.contains('collapsed');
-      card.classList.toggle('collapsed', nowOpen);
-      saved[id] = !nowOpen;
-      try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+      setExpanded(card.classList.contains('collapsed'),true);
     });
   }
   $$('.view').forEach((view) => {
@@ -4416,8 +4681,8 @@ $('#aiChatClear').addEventListener('click', async () => {
     { id: 'act-resync', label: 'Re-sync sources & targets now', icon: 'refresh', run: () => resyncChannels(true) },
     { id: 'act-theme', label: 'Cycle design style', icon: 'sun', run: () => { const b = $('#themeBtn'); if (b) b.click(); } },
     { id: 'act-robot', label: 'Open the AI assistant', icon: 'robot', run: () => { const b = $('#robotFab'); if (b) b.click(); } },
-    { id: 'act-settings-ai', label: 'Settings → AI provider', icon: 'bot', run: () => { show('settings'); setTimeout(() => $('#aiProvider').scrollIntoView({ block: 'center' }), 200); } },
-    { id: 'act-settings-cloud', label: 'Settings → Cloud memory', icon: 'cloud', run: () => { show('settings'); setTimeout(() => $('#backupNow').scrollIntoView({ block: 'center' }), 200); } }
+    { id: 'act-settings-ai', label: 'Settings → AI provider', icon: 'bot', run: () => { show('settings'); setTimeout(() => { const el=$('#aiProvider'); window.showWorkspaceElement?.(el); el.scrollIntoView({ block: 'center' }); }, 200); } },
+    { id: 'act-settings-cloud', label: 'Settings → Cloud memory', icon: 'cloud', run: () => { show('settings'); setTimeout(() => { const el=$('#backupNow'); window.showWorkspaceElement?.(el); el.scrollIntoView({ block: 'center' }); }, 200); } }
   ];
   const items = [
     ...ACTIONS,
@@ -5270,7 +5535,7 @@ function wireKpiDrag() {
   let dragId = null;
   $$('.kpi-drag', grid).forEach((card) => {
     card.addEventListener('dragstart', (e) => { dragId = card.dataset.kpi; try { e.dataTransfer.setData('text/plain', dragId); e.dataTransfer.effectAllowed = 'move'; } catch { } });
-    card.addEventListener('dragend', () => { dragId = null; saveKpiOrder(); });
+    card.addEventListener('dragend', () => { dragId = null; saveKpiOrder(); paintKpiOrderControls(); });
     card.addEventListener('dragover', (e) => {
       e.preventDefault();
       const overId = card.dataset.kpi;
@@ -5287,7 +5552,27 @@ function wireKpiDrag() {
 let __kpiSaveT = null;
 function saveKpiOrder() {
   clearTimeout(__kpiSaveT);
-  __kpiSaveT = setTimeout(() => api('/api/settings', { method: 'POST', body: { kpiOrder: __kpiOrder } }).then(() => toast('KPI order saved', 'ok')).catch(() => { }), 500);
+  __kpiSaveT = setTimeout(() => api('/api/settings', { method: 'POST', body: { kpiOrder: __kpiOrder } }).then(() => toast('KPI order saved', 'ok')).catch((e) => toast('Could not save metric order: ' + e.message, 'err')), 500);
+}
+function paintKpiOrderControls() {
+  const box=$('#metricOrderControls'), grid=$('#kpiGrid');
+  if (!box || !grid) return;
+  const cards=[...grid.querySelectorAll('.kpi-drag')];
+  box.replaceChildren();
+  cards.forEach((card,i)=>{
+    const row=document.createElement('div'); row.className='metric-order-row';
+    const name=card.querySelector('.k-l')?.textContent || card.dataset.kpi;
+    const label=document.createElement('span'); label.textContent=name; row.append(label);
+    for (const [direction,symbol] of [[-1,'↑'],[1,'↓']]) {
+      const b=document.createElement('button'); b.type='button'; b.textContent=symbol; b.disabled=(direction<0?i===0:i===cards.length-1); b.setAttribute('aria-label',`Move ${name} ${direction<0?'earlier':'later'}`);
+      b.addEventListener('click',()=>{
+        if (direction<0) grid.insertBefore(card,cards[i-1]); else grid.insertBefore(cards[i+1],card);
+        __kpiOrder=[...grid.querySelectorAll('.kpi-drag')].map(c=>c.dataset.kpi).join(','); saveKpiOrder(); paintKpiOrderControls();
+        const moved=[...box.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')===b.getAttribute('aria-label')&&!x.disabled); (moved || [...box.querySelectorAll('button')].find(x=>x.getAttribute('aria-label')?.startsWith('Move '+name+' ')&&!x.disabled))?.focus();
+      }); row.append(b);
+    }
+    box.append(row);
+  });
 }
 /* J2 — finish / reopen the saved wizard */
 {
@@ -5805,7 +6090,8 @@ function applyLang(lang) {
       pill.id = 'wizPill';
       pill.title = 'Reopen the setup wizard — your progress is saved';
       pill.addEventListener('click', () => { wizSkipped = false; window.openWizard(); });
-      document.body.appendChild(pill);
+      const foot = document.querySelector('.sb-foot');
+      (foot || document.body).prepend(pill);
     }
     if (!pill) return;
     pill.hidden = !avail || (wiz && !wiz.hidden);
@@ -5897,6 +6183,103 @@ function applyLang(lang) {
   /* Library → “Make a card in Compose” */
   const lc = $('#libCardGo');
   if (lc) lc.addEventListener('click', () => { show('newpost'); });
+})();
+
+/* View sections: a focused panel navigator rather than one very long page.
+   It does not delete, clone or recreate controls; all existing listeners and
+   saved data remain attached to the original elements. */
+(function workspaceNavigation() {
+  const root = document.getElementById('content');
+  function shortName(el, index) {
+    const h = el.querySelector(':scope > .card-h') || el.querySelector('.card-h') || el.querySelector('h2,h3');
+    if (!h) return el.id ? el.id.replace(/([A-Z])/g,' $1').replace(/^./,x=>x.toUpperCase()).slice(0,28) : 'Section ' + (index+1);
+    const copy = h.cloneNode(true);
+    copy.querySelectorAll('svg,button,input,select,.muted,.pill,.chev,.num').forEach(n=>n.remove());
+    return copy.textContent.replace(/\s+/g,' ').trim().replace(/[—–].*$/,'').slice(0,34) || 'Section ' + (index+1);
+  }
+  function install(parent, panels, preferred) {
+    panels = panels.filter(Boolean);
+    if (panels.length < 2 || parent.dataset.workspaceNav === '1') return;
+    parent.dataset.workspaceNav = '1';
+    const nav = document.createElement('div'); nav.className = 'workspace-panel-nav';
+    const list = document.createElement('div'); list.className = 'workspace-panel-buttons'; list.setAttribute('role','tablist'); list.setAttribute('aria-label','Sections on this page');
+    const selectWrap = document.createElement('label'); selectWrap.className = 'workspace-panel-select'; selectWrap.append('Section ');
+    const select = document.createElement('select'); select.className='in'; select.setAttribute('aria-label','Choose page section'); selectWrap.append(select);
+    const names = panels.map((p,i)=>shortName(p,i));
+    if (panels.length > 4) nav.classList.add('many');
+    panels.forEach((p,i)=>{
+      p.classList.add('workspace-pane'); p.tabIndex=0; p.setAttribute('role','tabpanel'); p.setAttribute('aria-label', names[i]); p.dataset.workspacePane = String(i); p.id = p.id || ('workspace-pane-' + (document.querySelectorAll('.workspace-pane').length));
+      const b=document.createElement('button'); b.type='button'; b.className='workspace-tab'; b.setAttribute('role','tab'); b.setAttribute('aria-controls',p.id); b.id=p.id+'-tab'; p.setAttribute('aria-labelledby',b.id); b.textContent=names[i]; b.title=names[i];
+      const option=document.createElement('option'); option.value=String(i); option.textContent=names[i]; select.append(option);
+      b.addEventListener('click',()=>activate(i)); list.append(b);
+    });
+    nav.append(list,selectWrap); parent.insertBefore(nav,panels[0]);
+    function activate(index) {
+      index=Math.max(0,Math.min(panels.length-1,Number(index)||0));
+      panels.forEach((p,i)=>{ const on=i===index; p.toggleAttribute('data-work-hidden',!on); if(on && p.classList.contains('collapsed')) p.__setExpanded?.(true,false); });
+      [...list.children].forEach((b,i)=>{b.classList.toggle('on',i===index);b.setAttribute('aria-selected',String(i===index));b.tabIndex=i===index?0:-1;});
+      select.value=String(index);
+      requestAnimationFrame(()=>window.__fitWorkspacePanes?.());
+    }
+    select.addEventListener('change',()=>activate(select.value));
+    list.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(e.key))return; e.preventDefault(); const i=Number(select.value), next=e.key==='Home'?0:e.key==='End'?panels.length-1:(i+(e.key==='ArrowRight'?1:-1)+panels.length)%panels.length;activate(next);list.children[next].focus();});
+    activate(preferred || 0);
+  }
+  window.showWorkspaceElement = function(el) {
+    if (!el) return;
+    const group=el.closest('.set-group');
+    if (group && !group.classList.contains('on')) {
+      const key=group.dataset.setgroup;
+      const tab=[...document.querySelectorAll('#setNav .set-tab')].find(t=>(t.dataset.sets || t.dataset.setgroup || '').split(',').map(s=>s.trim()).includes(key));
+      if (tab) tab.click();
+    }
+    let pane=el.closest('.workspace-pane');
+    while (pane) {
+      const sel=pane.parentElement.querySelector(':scope > .workspace-panel-nav select');
+      if (sel) { sel.value=pane.dataset.workspacePane; sel.dispatchEvent(new Event('change',{bubbles:true})); }
+      pane=pane.parentElement.closest('.workspace-pane');
+    }
+    let card=el.closest('.card.collapsed');
+    if (card) card.__setExpanded?.(true,false);
+  };
+  // Scrollable tables and queues must be operable without a pointing device.
+  document.querySelectorAll('.tw, #queueList').forEach(el=>{
+    if (!el.hasAttribute('tabindex')) el.tabIndex=0;
+    if (!el.hasAttribute('role')) el.setAttribute('role','region');
+    if (!el.hasAttribute('aria-label')) el.setAttribute('aria-label', el.id==='queueList' ? 'Approval queue list' : 'Scrollable data table');
+  });
+  const views = [...document.querySelectorAll('#content > .view')];
+  const skip = new Set(['home','whatsapp','settings','approvals','scheduled','audit']);
+  const defaults = {newpost:1, sources:1, targets:1, browse:1};
+  for (const view of views) {
+    const name=view.dataset.view;
+    if (skip.has(name)) continue;
+    const panels=[...view.children].filter(el=>el.classList.contains('card') || el.classList.contains('duo') || el.classList.contains('brand-grid') || el.id==='anGoalsDuo');
+    install(view,panels,defaults[name] || 0);
+  }
+  // These two screens already switch modes; their content is segmented inside each mode.
+  for (const [selector,preferred] of [['#schedListMode',1],['#queueTabApprovals',1],['#queueTabLive',0]]) {
+    const p=document.querySelector(selector); if(!p)continue;
+    install(p,[...p.children].filter(el=>el.classList.contains('card')),preferred);
+  }
+  // Per-category settings are independent, so choosing a category never hides its controls.
+  for (const group of document.querySelectorAll('#setBody .set-group')) {
+    install(group,[...group.children].filter(el=>el.classList.contains('card')),0);
+  }
+  // Compute the available region from its actual on-screen position, not a fixed page height.
+  window.__fitWorkspacePanes = function() {
+    const bottomBar=document.querySelector('.btabs');
+    const bottom = bottomBar && getComputedStyle(bottomBar).display !== 'none' ? Math.max(0,innerHeight-bottomBar.getBoundingClientRect().top) : 0;
+    for (const pane of document.querySelectorAll('.workspace-pane, .home-sheet')) {
+      if (!pane.getClientRects().length || pane.closest('[hidden],[data-work-hidden]')) continue;
+      const top=pane.getBoundingClientRect().top;
+      const available=Math.max(170,Math.floor(innerHeight-bottom-top-18));
+      pane.style.setProperty('--pane-space',available+'px');
+    }
+  };
+  window.addEventListener('resize',()=>requestAnimationFrame(window.__fitWorkspacePanes));
+  root.addEventListener('click',()=>setTimeout(window.__fitWorkspacePanes,80));
+  setTimeout(window.__fitWorkspacePanes,300);
 })();
 
 /* ── 24 · BOOT ──────────────────────────────────────────────────── */

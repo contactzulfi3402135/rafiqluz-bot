@@ -1,0 +1,32 @@
+'use strict';
+// Synthetic Bot API responses; no real account or network is used.
+const fs=require('fs'),path=require('path'),os=require('os'),assert=require('assert'),crypto=require('crypto');
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),'raq-telegram-'));const cfg=require('../src/config');cfg.config.paths.database=path.join(dir,'db.sqlite');cfg.config.paths.sessions=path.join(dir,'sessions');
+const db=require('../src/db');db.open();const tg=require('../src/telegram-publish');let n=0;const ok=(v,s)=>{assert.ok(v,s);n++;console.log('✓ '+s)};
+const token='123456:abcdefghijklmnopqrstuvwxyzABCDEFG';process.env.TELEGRAM_BOT_TOKEN=token;
+const id=()=>crypto.randomUUID();const input=(extra={})=>({requestId:id(),target:'@examplechannel',text:'A real message preview',confirmed:true,...extra});
+let calls=[];const bot=async(method,data)=>{calls.push({method,data});if(method==='getMe')return {id:123456};if(method==='getChat')return {id:-1001234567890,type:'channel',title:'Example'};if(method==='getChatMember')return {status:'administrator',can_post_messages:true};if(method==='sendMessage')return {message_id:87};throw Error('bad method');};
+(async()=>{
+ tg._setTransportForTests(bot);ok(tg.configured(),'Telegram is configured only with a correctly shaped token');
+ await assert.rejects(()=>tg.publish(input({confirmed:false})),/Confirm/);ok(calls.length===0,'publishing requires explicit confirmation');
+ await assert.rejects(()=>tg.publish(input({target:'12345@g.us'})),/channel/);ok(calls.length===0,'personal and group destinations fail validation');
+ await assert.rejects(()=>tg.publish(input({text:'x'.repeat(4097)})),/4096/);ok(calls.length===0,'oversized text is rejected before network calls');
+ db.S.set('panic.on','1');await assert.rejects(()=>tg.publish(input()),/Panic/);db.S.set('panic.on','0');ok(calls.length===0,'panic prevents new Telegram requests');
+ const first=input(),r=await tg.publish(first);ok(r.record.state==='accepted'&&r.record.providerId==='87'&&calls.map(c=>c.method).join(',')==='getMe,getChat,getChatMember,sendMessage','bot identity, channel and posting role are checked before sending');
+ ok(calls[3].data.chat_id==='-1001234567890'&&calls[3].data.text===first.text,'the confirmed text is sent to the verified canonical channel');
+ const priorCalls=calls.length,replay=await tg.publish(first);ok(replay.replayed&&replay.record.state==='accepted'&&calls.length===priorCalls,'completed request is replayed without sending twice');
+ const conflict=await tg.publish({...first,text:'different'});ok(conflict.conflict&&calls.length===priorCalls,'request ID cannot be reused for altered content');
+ let groups=[];tg._setTransportForTests(async(method,data)=>{groups.push(method);if(method==='getMe')return {id:123456};if(method==='getChat')return {id:-1001234567890,type:'supergroup'};throw Error('must not send')});
+ const group=await tg.publish(input());ok(group.record.state==='rejected'&&!groups.includes('sendMessage'),'a resolved Telegram group is never sent to');
+ let perms=[];tg._setTransportForTests(async(method,data)=>{perms.push(method);if(method==='getMe')return {id:123456};if(method==='getChat')return {id:-1001234567890,type:'channel'};if(method==='getChatMember')return {status:'administrator',can_post_messages:false};throw Error('must not send')});
+ const noPerm=await tg.publish(input());ok(noPerm.record.state==='rejected'&&!perms.includes('sendMessage'),'channel administrator without posting rights is refused');
+ tg._setTransportForTests(async(method,data)=>{if(method==='sendMessage')throw Error('response lost');return bot(method,data)});
+ const ambiguous=input();const lost=await tg.publish(ambiguous);ok(lost.record.state==='uncertain'&&/unknown/i.test(lost.record.detail),'lost send response is recorded as uncertain');
+ const again=await tg.publish(ambiguous);ok(again.replayed&&again.record.state==='uncertain','uncertain request is not automatically replayed');
+ let release,start;const gate=new Promise(r=>release=r),started=new Promise(r=>start=r);let sendCount=0;
+ tg._setTransportForTests(async(method,data)=>{if(method==='sendMessage'){sendCount++;start();await gate;return {message_id:90}}return bot(method,data)});
+ const concurrent=input();const ongoing=tg.publish(concurrent);await started;const duplicate=await tg.publish(concurrent);ok(duplicate.replayed&&duplicate.record.state==='running'&&sendCount===1,'concurrent duplicate cannot start another provider send');release();await ongoing;
+ ok(!JSON.stringify(tg.recent()).includes(token)&&!JSON.stringify(tg.status(first.requestId)).includes(token),'status and history never return the bot token');
+ ok(tg.status(first.requestId).text===first.text,'journal retains reviewed text for recovery');
+ console.log(`PASS: ${n} Telegram publishing checks`);
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>{tg._setTransportForTests(null);delete process.env.TELEGRAM_BOT_TOKEN;try{db.open().close()}catch{}fs.rmSync(dir,{recursive:true,force:true})});

@@ -20,8 +20,12 @@ async function tick(session = 'main') {
   running.add(session);
   try {
     for (const row of WAS.due(Date.now(),session)) {
+      if (require('./lifecycle').isStopping() || require('./panic').active()) break;
+      const latest=WAS.get(row.id);
+      if(!latest || !latest.enabled || latest.at!==row.at || latest.jid!==row.jid || latest.text!==row.text)continue;
       const text = String(row.text || '').slice(0,4096);
-      if (!text) continue;
+      // Leave legacy unsupported jobs intact, but never send them.
+      if (!/^[0-9]{8,15}@s\.whatsapp\.net$/.test(String(row.jid || '')) || !text) continue;
       const ledger = require('./delivery-ledger');
       const source = `wasched:${session}`;
       const occurrence = `${row.id}:${row.at}`;
@@ -31,6 +35,7 @@ async function tick(session = 'main') {
       if (claim.claimed) {
         try {
           const result = await sock.sendMessage(row.jid,{text});
+          if (!result?.key?.id) throw Error('Provider returned no message ID');
           ledger.finish(source,occurrence,row.jid,0,'accepted',result?.key?.id || '', 'Provider accepted; delivery not confirmed');
         } catch (err) {
           ledger.finish(source,occurrence,row.jid,0,'uncertain','',String(err.message || err));
@@ -72,6 +77,8 @@ function add({ session, jid, text, localAt, repeat = 'once', weekdays = '', inte
   const rep = ['once', 'daily', 'weekly', 'weekdays', 'interval'].includes(repeat) ? repeat : 'once';
   const atIso = power.localToUtc(String(localAt || ''), 'Asia/Karachi');
   if (!atIso || !jid || !String(text || '').trim()) throw new Error('A contact, message and time are required.');
+  if (String(text).length>4096) throw new Error('Scheduled text must be 4,096 characters or less.');
+  if (!/^[0-9]{8,15}@s\.whatsapp\.net$/.test(String(jid))) throw new Error('Scheduled personal messages cannot be sent to groups or channels.');
   const id = WAS.add({
     session, jid, text,
     at: rep === 'interval' ? new Date(Math.max(Date.now(), Date.parse(atIso))).toISOString() : atIso,

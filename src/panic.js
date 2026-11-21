@@ -16,11 +16,13 @@ function state() {
 }
 
 function stop(by = 'owner') {
+  // Repeated stop requests must not overwrite the original paused state.
+  if (active()) return state() || {mirrorPaused:true,at:Date.now(),by:'unknown'};
   const prev = db.S.getBool('mirror.paused', false);
   const st = { mirrorPaused: prev, at: Date.now(), by: String(by).slice(0, 40) };
-  db.S.set('panic.state', JSON.stringify(st));
-  db.S.set('panic.on', '1');
-  db.S.set('mirror.paused', '1'); // same flag as the manual global pause
+  // Commit the saved state and both gates together. A storage failure must
+  // never leave a half-written panic record that looks successfully engaged.
+  db.S.setMany([['panic.state', JSON.stringify(st)], ['panic.on', '1'], ['mirror.paused', '1']]);
   try { db.AUD.log(st.by, 'panic.stop', `Panic stop engaged — mirroring was ${prev ? 'already paused' : 'running'}; queue, scheduler, auto-replies and reports are frozen until restore`); } catch { }
   try { db.NTF.add('panic', 'Panic stop engaged — everything paused. Restore it from the red banner.'); } catch { }
   try { require('./webhooks').fire('panic.on', { by: st.by, mirroringWas: st.mirrorPaused ? 'paused' : 'running' }); } catch { } // 5G (R80)
@@ -28,10 +30,11 @@ function stop(by = 'owner') {
 }
 
 function restore(by = 'owner') {
-  const st = state() || { mirrorPaused: false, at: 0, by: '?' };
-  db.S.set('mirror.paused', st.mirrorPaused ? '1' : '0'); // EXACT previous state
-  db.S.set('panic.on', '0');
-  db.S.set('panic.state', '');
+  // A repeated restore must not unpause a manually paused installation.
+  if (!active()) return {mirrorPaused:db.S.getBool('mirror.paused',false),at:0,by:'already restored'};
+  // Missing/corrupt saved state must fail closed rather than unpausing.
+  const st = state() || { mirrorPaused: true, at: 0, by: '?' };
+  db.S.setMany([['mirror.paused', st.mirrorPaused ? '1' : '0'], ['panic.on', '0'], ['panic.state', '']]);
   try { db.AUD.log(by, 'panic.restore', `Panic stop restored — mirroring ${st.mirrorPaused ? 'paused (as it was before)' : 'running (as it was before)'}`); } catch { }
   try { db.NTF.add('panic', 'Panic stop restored — normal operation resumed.'); } catch { }
   try { require('./webhooks').fire('panic.off', { mirroringNow: st.mirrorPaused ? 'paused (as before)' : 'running (as before)' }); } catch { } // 5G (R80)

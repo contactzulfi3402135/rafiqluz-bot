@@ -1,0 +1,43 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('fs'),path=require('path'),os=require('os');
+const {EventEmitter}=require('events');const {PassThrough}=require('stream');
+const root=fs.mkdtempSync(path.join(os.tmpdir(),'raq-rss-safe-'));const cfg=require('../src/config');cfg.config.paths.database=path.join(root,'bot.sqlite');cfg.config.paths.sessions=path.join(root,'sessions');cfg.config.paths.media=path.join(root,'media');
+const db=require('../src/db');db.open();const rss=require('../src/rss'),{fetchPublic}=require('../src/safe-public-fetch');
+let n=0;const ok=(v,s)=>{assert.ok(v,s);n++;console.log('✓ '+s)};
+const fake=(responses,seen)=>(url,opts,cb)=>{const req=new EventEmitter();req.end=()=>setImmediate(()=>{const v=responses.shift();seen.push({url:String(url),lookup:opts.lookup});const res=new PassThrough();res.statusCode=v.status||200;res.headers=v.headers||{};cb(res);res.end(v.body||Buffer.from('content'));});return req};
+(async()=>{
+ await assert.rejects(()=>fetchPublic('http://127.0.0.1/secrets'),/restricted/);ok(true,'private literal feed URLs are blocked');
+ const lookup=async()=>[{address:'8.8.8.8',family:4}];let seen=[];
+ let buf=await fetchPublic('https://public.test/rss',{lookup,request:fake([{body:Buffer.from('feed')}],seen)});ok(buf.toString()==='feed','public feed response is read');
+ await new Promise((resolve,reject)=>seen[0].lookup('else',{},(e,a,f)=>{try{assert.equal(a,'8.8.8.8');assert.equal(f,4);resolve()}catch(x){reject(x)}}));ok(true,'feed connection pins the checked address');
+ await assert.rejects(()=>fetchPublic('https://public.test/',{lookup:async()=>[{address:'8.8.8.8',family:4},{address:'192.168.1.1',family:4}],request:fake([],[])}),/restricted/);ok(true,'mixed public and private feed DNS is blocked');
+ seen=[];await assert.rejects(()=>fetchPublic('https://public.test/',{lookup,request:fake([{status:302,headers:{location:'http://169.254.169.254/private'}}],seen)}),/restricted/);ok(seen.length===1,'feed redirects to private networks are blocked before connection');
+ await assert.rejects(()=>fetchPublic('https://public.test/',{lookup,request:fake([{headers:{'content-length':'2097153'}}],[])}),/size limit/);ok(true,'declared oversized feeds are refused');
+ await assert.rejects(()=>fetchPublic('https://public.test/',{lookup,request:fake([{body:Buffer.alloc(2*1024*1024+1)}],[])}),/size limit/);ok(true,'oversized streaming feeds are refused');
+ await assert.rejects(()=>fetchPublic('http://user:password@public.test/',{lookup}),/without credentials/);ok(true,'feed URLs cannot contain credentials');
+ await assert.rejects(()=>fetchPublic('https://hang.test/',{lookup:()=>new Promise(()=>{}),timeoutMs:30}),/timed out/);ok(true,'feed DNS resolution has a deadline');
+ const xml='<rss><item><title>News</title><guid>one</guid><description><![CDATA[<p>Body</p>]]></description></item></rss>';
+ const parsed=rss.parseFeed(xml);ok(parsed.length===1&&parsed[0].id==='one'&&parsed[0].text.includes('Body'),'RSS item parsing retains title, body and identity');
+ const atom=rss.parseFeed('<feed><entry><title>Hello</title><id>atom-1</id><link rel="alternate" href="https://example.com/story"/></entry></feed>');ok(atom.length===1&&atom[0].link==='https://example.com/story','Atom alternate links parse');
+ const start=Date.now();rss.parseFeed('<rss><item><description>'+ '<'.repeat(500000)+'</description></item></rss>');ok(Date.now()-start<3000,'malformed long markup is processed in bounded time');
+ const src={url:'https://public.test/feed',jid:'rss-test@rss',name:'Test'};let calls=0,mode='deferred';
+ let opts={fetchFeed:async()=>xml,pipeline:{intakeRss:async()=>{calls++;return {state:mode}}}};
+ let result=await rss.pollOnce(src,opts);ok(result.deferred===1&&db.open().prepare('SELECT COUNT(*) n FROM rss_seen').get().n===0,'deferred feed item remains eligible for the next poll');
+ db.S.set('mirror.paused','1');result=await rss.pollOnce(src,opts);ok(result.deferred===1&&calls===1,'paused mirroring never consumes unseen feed items');db.S.set('mirror.paused','0');
+ mode='recorded';result=await rss.pollOnce(src,opts);ok(result.added===1&&db.open().prepare('SELECT COUNT(*) n FROM rss_seen').get().n===1,'only a recorded item is marked as seen');
+ result=await rss.pollOnce(src,opts);ok(result.seen===1&&calls===2,'recorded feed item is not automatically replayed');
+ seen=[];await assert.rejects(()=>fetchPublic('https://public.test/hook',{lookup,method:'POST',body:'{}',request:fake([{status:302,headers:{location:'https://other.test/'}}],seen)}),/redirects are not followed/);ok(seen.length===1,'webhook payload is not forwarded through redirects');
+ const empty=await fetchPublic('https://public.test/hook',{lookup,method:'POST',body:'{}',allowEmpty:true,returnStatus:true,request:fake([{status:204,body:Buffer.alloc(0)}],[])});ok(empty.status===204&&empty.buffer.length===0,'empty successful webhook responses are accepted');
+ const hooks=require('../src/webhooks');assert.throws(()=>hooks.add({name:'local',url:'http://127.0.0.1/private',events:['post.failed']}),/private or restricted/);ok(true,'new private webhook endpoints are refused');
+ const id=hooks.add({name:'public',url:'https://hooks.example.test/',events:['post.failed']});const net=require('../src/safe-public-fetch'),real=net.fetchPublic;let outbound;
+ net.fetchPublic=async(url,opts)=>{outbound={url,opts};return {status:204,buffer:Buffer.alloc(0)}};
+ try{
+  const delivered=await hooks.testHook(id);ok(delivered.ok&&delivered.status===204&&outbound.opts.method==='POST'&&JSON.parse(outbound.opts.body).event==='webhook.test' && /^[0-9a-f-]{36}$/.test(JSON.parse(outbound.opts.body).eventId),'webhook test sends the expected event through the restricted transport');
+  hooks._setDelayScale(0);const ids=[];net.fetchPublic=async(_url,opts)=>{ids.push(JSON.parse(opts.body).eventId);if(ids.length===1)throw Error('response lost');return {status:204,buffer:Buffer.alloc(0)}};
+  const retried=await hooks.testHook(id);ok(retried.ok&&ids.length===2&&ids[0]===ids[1],'webhook retries keep the same event ID for receiver deduplication');
+  db.S.set('panic.on','0');let attempts=0;net.fetchPublic=async()=>{attempts++;db.S.set('panic.on','1');throw Error('response lost')};
+  const stopped=await hooks.testHook(id);ok(!stopped.ok&&attempts===1&&/paused/.test(stopped.error),'panic stops further webhook retries after the current attempt');
+  let blocked=0;net.fetchPublic=async()=>{blocked++;return{status:204,buffer:Buffer.alloc(0)}};await hooks.testHook(id);ok(blocked===0,'panic blocks new ordinary test webhooks');db.S.set('panic.on','0');
+ }finally{net.fetchPublic=real;}
+ console.log(`PASS: ${n} feed and webhook safety checks`);
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>{try{db.open().close()}catch{}fs.rmSync(root,{recursive:true,force:true})});

@@ -41,7 +41,6 @@ function write(level, code, msg, extra) {
   try {
     ring.db?.prepare("INSERT INTO logs(ts, level, code, msg, extra) VALUES(datetime('now'),?,?,?,?)")
       .run(level, String(code || '').slice(0, 48), String(msg || '').slice(0, 500), extra ? JSON.stringify(extra).slice(0, 500) : null);
-    ring.db?.prepare("DELETE FROM logs WHERE ts < datetime('now', '-14 days')").run();
   } catch { /* best effort */ }
   try { logEvents.emit('log', { level, code: String(code || ''), msg: String(msg || '').slice(0, 160) }); } catch { /* never break logging */ }
 }

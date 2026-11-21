@@ -1,0 +1,38 @@
+'use strict';
+// DESTRUCTIVE to the raq_worker_experiment schema in a disposable DB only.
+const assert=require('node:assert/strict'),crypto=require('node:crypto'),{Pool}=require('pg');
+const name=process.env.RAQ_TEST_PG_DATABASE,host=process.env.RAQ_TEST_PG_HOST,port=Number(process.env.RAQ_TEST_PG_PORT),admin=process.env.RAQ_TEST_PG_ADMIN;
+if(process.env.RAQ_TEST_PG_ALLOW_DROP!=='1'||!/^raq_test_[a-z0-9_]+$/.test(name||'')||!host?.startsWith('/')||!port||!admin)throw Error('Refusing test: require a disposable raq_test_* database, local Unix socket and explicit RAQ_TEST_PG_ALLOW_DROP=1');
+const pool=new Pool({database:name,host,port,user:admin,max:8}),{install,worker}=require('../src/saas-control/worker-experiment');let n=0;
+const ok=(v,s)=>{assert.ok(v,s);n++;console.log('✓ '+s)};
+(async()=>{try{
+ await pool.query('DROP SCHEMA IF EXISTS raq_worker_experiment CASCADE');
+ const result=await install(pool);ok(/^[a-f0-9]{64}$/.test(result.checksum),'dedicated schema initializes with checksum');
+ await assert.rejects(()=>install(pool),/already exists/);ok(true,'reinstallation refuses to alter existing schema');
+ const api=worker(pool),a=crypto.randomUUID(),b=crypto.randomUUID(),job=(workspaceId,key,payload={text:key})=>api.enqueue({workspaceId,kind:'synthetic',key,payload});
+ const a1=await job(a,'a1'),a2=await job(a,'a2'),b1=await job(b,'b1');ok(a1.created&&a2.created&&b1.created,'jobs can be enqueued for two workspaces');
+ const replay=await job(a,'a1');ok(!replay.created&&replay.job.id===a1.job.id,'same idempotency key and payload return the original job');
+ await assert.rejects(()=>job(a,'a1',{text:'different'}),/different payload/);ok(true,'same idempotency key rejects a different payload');
+ const [x,y,z]=await Promise.all([api.claim('worker-1'),api.claim('worker-2'),api.claim('worker-3')]);const claimed=[x,y,z].filter(Boolean);ok(claimed.length===2&&new Set(claimed.map(c=>c.workspace_id)).size===2,'concurrent workers lease only one job per workspace');
+ const first=claimed.find(c=>c.workspace_id===a);ok(await api.heartbeat(first.id,first.lease_token,first.fence,20),'live lease can be renewed');
+ ok(!(await api.beginDispatch(first.id,crypto.randomUUID(),first.fence)),'wrong token cannot begin dispatch');
+ ok(await api.beginDispatch(first.id,first.lease_token,first.fence),'live owner may begin external dispatch');
+ ok(!(await api.release(first.id,first.lease_token,first.fence)),'dispatching cannot be automatically requeued');
+ ok(await api.complete(first.id,first.lease_token,first.fence,{accepted:true}),'live dispatched job completes');
+ const next=await api.claim('worker-3');ok(next&&next.workspace_id===first.workspace_id&&next.id!==first.id,'next same-workspace job proceeds after completion');
+ await pool.query("UPDATE raq_worker_experiment.jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",[next.id]);
+ const recovered=await api.claim('worker-4');ok(recovered&&recovered.id===next.id&&BigInt(recovered.fence)>BigInt(next.fence),'pre-dispatch expired lease is recovered with a higher fence');
+ ok(!(await api.beginDispatch(next.id,next.lease_token,next.fence)),'old worker cannot act after reassignment');
+ ok(await api.beginDispatch(recovered.id,recovered.lease_token,recovered.fence),'recovered worker can begin dispatch');
+ await pool.query("UPDATE raq_worker_experiment.jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",[recovered.id]);
+ ok(!(await api.complete(recovered.id,recovered.lease_token,recovered.fence,{accepted:true})),'expired dispatch cannot report success');
+ await api.claim('recovery');let row=(await pool.query('SELECT state FROM raq_worker_experiment.jobs WHERE id=$1',[recovered.id])).rows[0];ok(row.state==='uncertain','expired post-dispatch lease becomes uncertain and is not retried');
+ ok(!(await api.reconcile(recovered.id,crypto.randomUUID(),'succeeded','not our job')),'reconciliation requires matching workspace');
+ ok(await api.reconcile(recovered.id,recovered.workspace_id,'succeeded','provider confirmed'),'uncertain job accepts explicit reconciliation');
+ const other=claimed.find(c=>c.workspace_id===b);ok(await api.beginDispatch(other.id,other.lease_token,other.fence),'other workspace proceeds independently');ok(await api.finish(other.id,other.lease_token,other.fence,'uncertain','provider timeout'),'unknown provider result is recorded as uncertain');
+ const [l1,l2]=await Promise.all([api.acquireLeadership('schedule','s1'),api.acquireLeadership('schedule','s2')]);const leader=l1||l2;ok(!!leader&&!(l1&&l2),'only one concurrent scheduler gets leadership');
+ ok(!(await api.renewLeadership('schedule',crypto.randomUUID(),leader.fence)),'wrong leadership token cannot renew');ok(await api.renewLeadership('schedule',leader.token,leader.fence),'leader can renew');
+ await pool.query("UPDATE raq_worker_experiment.leadership SET expires_at=clock_timestamp()-interval '1 second' WHERE name='schedule'");const successor=await api.acquireLeadership('schedule','s3');ok(successor&&BigInt(successor.fence)>BigInt(leader.fence),'expired leadership can be reacquired with a higher fence');
+ ok(!(await api.releaseLeadership('schedule',leader.token,leader.fence)),'stale leader cannot release successor');ok(await api.releaseLeadership('schedule',successor.token,successor.fence),'current leader can release leadership');
+ console.log('PASS: '+n+' PostgreSQL worker experiment checks');
+ }finally{await pool.end()}})().catch(e=>{console.error(e);process.exitCode=1});

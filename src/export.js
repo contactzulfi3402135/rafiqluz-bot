@@ -4,6 +4,7 @@
  *  binary fonts, no dependencies — the 200 MB dyno does not earn a PDF
  *  library). The xref offsets are computed byte-exact and verified by tests. */
 const { A, open } = require('./db');
+const { csvCell } = require('./csv-safe');
 
 function fromFor(days) { return new Date(Date.now() - days * 86400e3).toISOString().slice(0, 19).replace('T', ' '); }
 function dirNames() { try { return Object.fromEntries(require('./db').CH.dirList().map((c) => [c.jid, c.name || c.jid])); } catch { return {}; } }
@@ -32,10 +33,9 @@ function summary(days) {
 function csv(days) {
   const from = fromFor(days);
   const names = dirNames();
-  const esc = (v) => { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const lines = ['id,created_at,source,status,reason,targets,media,body'];
   for (const r of A.rows(from, 5000)) {
-    lines.push([r.id, r.created_at, names[r.source_jid] || r.source_jid, r.status, r.reason, r.targets, r.has_media ? 'yes' : 'no', String(r.body || '').slice(0, 500).replace(/\s+/g, ' ')].map(esc).join(','));
+    lines.push([r.id, r.created_at, names[r.source_jid] || r.source_jid, r.status, r.reason, r.targets, r.has_media ? 'yes' : 'no', String(r.body || '').slice(0, 500).replace(/\s+/g, ' ')].map(csvCell).join(','));
   }
   return lines.join('\n');
 }

@@ -8,7 +8,7 @@ process.env.SESSION_DIR = path.relative(path.join(__dirname,'..'), path.join(dir
 const db = require('../src/db'); const d = db.open();
 const wa = require('../src/wa'); const pace = require('../src/pace'); const ledger = require('../src/delivery-ledger');
 const pub = require('../src/publish'); const queue = require('../src/queue5a');
-pace.gapMin = () => 0; wa.getSocket = () => ({}); wa.getStatus = () => ({status:'open'});
+pace.gapMin = () => 0; wa.getSocket = () => ({}); wa.getStatus = () => ({status:'open'}); wa.channelMeta = async()=>({role:'OWNER'});
 db.CH.addTarget('a@newsletter','A'); db.CH.addTarget('b@newsletter','B');
 let n=0, calls=[]; const check = (name, fn) => { fn(); n++; console.log('✓ ' + name); };
 (async () => {
@@ -27,6 +27,21 @@ let n=0, calls=[]; const check = (name, fn) => { fn(); n++; console.log('✓ ' +
   check('changed content cannot reuse prior receipt', () => { assert.equal(r.complete,false); assert.match(r.errors[0],/content changed/); assert.equal(calls.length,3); });
   r = await pub.publish({text:'x'}, {sourceJid:'missing',sourceMsgId:'m',only:['missing@newsletter']});
   check('missing target is a failure', () => assert.ok(r.failed));
+  db.CH.addTarget('bad@g.us','Group');
+  let previousCalls=calls.length;
+  r=await pub.publish({text:'no group'},{sourceJid:'security',sourceMsgId:'group',only:['bad@g.us']});
+  check('channel publisher refuses group destinations',()=>{assert.equal(r.complete,false);assert.equal(calls.length,previousCalls);assert.match(r.errors.join(' '),/not a WhatsApp channel/)});
+  wa.channelMeta=async()=>({role:'VIEWER'});
+  r=await pub.publish({text:'no viewer'},{sourceJid:'security',sourceMsgId:'viewer',only:['a@newsletter']});
+  check('channel publisher refuses follower-only destinations',()=>{assert.equal(r.complete,false);assert.equal(calls.length,previousCalls);assert.match(r.errors.join(' '),/could not be verified/)});
+  wa.channelMeta=async()=>null;
+  r=await pub.publish({text:'no unknown'},{sourceJid:'security',sourceMsgId:'unknown',only:['a@newsletter']});
+  check('channel publisher fails closed if permission lookup fails',()=>{assert.equal(r.complete,false);assert.equal(calls.length,previousCalls)});
+  wa.channelMeta=async()=>{db.S.set('panic.on','1');return {role:'OWNER'};};
+  r=await pub.publish({text:'stopped'},{sourceJid:'security',sourceMsgId:'panic',only:['a@newsletter']});
+  check('panic activated during permission check blocks the send',()=>{assert.equal(r.complete,false);assert.equal(calls.length,previousCalls);assert.match(r.errors.join(' '),/stopped before sending/)});
+  db.S.set('panic.on','0');
+  wa.channelMeta=async()=>({role:'ADMIN'});
   let attempts=[];
   wa.sendToChannel = async (_s,jid,c) => { attempts.push(jid+':'+c.text); if (jid==='a@newsletter' && c.text==='one') throw new Error('unknown'); return 'p'+attempts.length; };
   r = await pub.publish({parts:[{text:'one'},{text:'two'}]}, {sourceJid:'split',sourceMsgId:'m',only:['a@newsletter','b@newsletter']});
@@ -45,6 +60,25 @@ let n=0, calls=[]; const check = (name, fn) => { fn(); n++; console.log('✓ ' +
   check('approval draft never auto-publishes with zero delay', () => { assert.equal(db.Q.one(qid).status,'pending'); assert.equal(calls.length,0); });
   queue.approve(qid); await new Promise(r=>setTimeout(r,30));
   check('explicit approval releases draft', () => { assert.equal(db.Q.one(qid).status,'published'); assert.equal(calls.length,1); });
+  db.CH.addSource('media-source@newsletter','Media source','test');
+  const mediaCalls=calls.length;
+  await require('../src/pipeline').intake({key:{remoteJid:'media-source@newsletter',id:'broken-media',fromMe:false},message:{imageMessage:{caption:'Keep the image',mediaKey:Buffer.alloc(32)}},messageTimestamp:Math.floor(Date.now()/1000)});
+  check('missing source media is failed rather than silently sent as text',()=>{const row=d.prepare("SELECT status,reason FROM posts WHERE source_jid=? AND source_msg_id=?").get('media-source@newsletter','broken-media');assert.equal(row.status,'failed');assert.match(row.reason,/media unavailable/);assert.equal(calls.length,mediaCalls)});
+  const safeNet=require('../src/safe-public-fetch'), originalFetch=safeNet.fetchPublic, originalSend=wa.sendToChannel, originalVerify=wa.verifyChannelPost, originalPull=wa.fetchChannelPosts;
+  d.prepare("UPDATE sources SET targets='a@newsletter' WHERE jid='media-source@newsletter'").run();
+  wa.fetchChannelPosts=async()=>[]; let mediaSent=[];
+  wa.sendToChannel=async(_sock,_jid,content)=>{mediaSent.push(content.image);return 'raw-media-id'};wa.verifyChannelPost=async()=>true;
+  const raw=Buffer.from('unchanged-source-media');safeNet.fetchPublic=async()=>raw;
+  const msg=(id,hash)=>({key:{remoteJid:'media-source@newsletter',id,fromMe:false},message:{imageMessage:{url:'https://cdn.example.test/photo',caption:'Photo',fileSha256:hash}},messageTimestamp:Math.floor(Date.now()/1000)});
+  await require('../src/pipeline').intake(msg('raw-ok',require('crypto').createHash('sha256').update(raw).digest()));
+  check('verified source image bytes are sent without modification',()=>{assert.equal(mediaSent.length,1);assert.deepEqual(mediaSent[0],raw)});
+  await require('../src/pipeline').intake(msg('raw-bad',Buffer.alloc(32)));
+  check('source media with a mismatching checksum is not sent',()=>{assert.equal(mediaSent.length,1);const row=d.prepare("SELECT status FROM posts WHERE source_msg_id='raw-bad'").get();assert.equal(row.status,'failed')});
+  safeNet.fetchPublic=originalFetch;
+  const privateMsg=msg('raw-private',null);privateMsg.message.imageMessage.url='http://127.0.0.1/private';
+  await require('../src/pipeline').intake(privateMsg);
+  check('private source-media URL is blocked without sending',()=>{assert.equal(mediaSent.length,1);assert.equal(d.prepare("SELECT status FROM posts WHERE source_msg_id='raw-private'").get().status,'failed')});
+  wa.sendToChannel=originalSend;wa.verifyChannelPost=originalVerify;wa.fetchChannelPosts=originalPull;
   const mid=queue.enqueue({sourceJid:'q',sourceMsgId:'2',text:'media',mediaBuf:Buffer.from('abc'),mediaKind:'image',targetJids:['a@newsletter'],requireApproval:true});
   fs.unlinkSync(db.Q.one(mid).media_path); d.prepare("UPDATE approvals SET status='approved' WHERE id=?").run(mid);
   await queue.release(mid);
@@ -59,9 +93,13 @@ let n=0, calls=[]; const check = (name, fn) => { fn(); n++; console.log('✓ ' +
   check('scheduler persists advancement and serializes overlapping ticks', () => { let j=power.jobs().find(x=>x.id===job.id); assert.equal(j.enabled,false); assert.equal(j.sent,1); assert.equal(calls.length,1); });
   const nums=require('../src/numbers'); let sessions=[];
   nums.getSocket=(id)=>({sendMessage:async(jid)=>{sessions.push(id+':'+jid);return {key:{id:'wa-id'}};}}); nums.statusOf=()=> 'open';
-  const wid=db.WAS.add({session:'extra',jid:'contact',text:'hello',at:new Date(Date.now()-1000).toISOString(),repeat:'once'});
+  const blockedJob=db.WAS.add({session:'extra',jid:'12345@g.us',text:'should not send',at:new Date(Date.now()-1000).toISOString(),repeat:'once'});
+  await require('../src/wasched').tick('extra');
+  check('legacy group schedules remain saved but never send',()=>{assert.equal(sessions.length,0);assert.equal(db.WAS.get(blockedJob).enabled,1);});
+  check('new group schedules are rejected',()=>assert.throws(()=>require('../src/wasched').add({session:'extra',jid:'12345@g.us',text:'x',localAt:'2030-01-01T12:00'}),/cannot be sent to groups/));
+  const wid=db.WAS.add({session:'extra',jid:'923001234567@s.whatsapp.net',text:'hello',at:new Date(Date.now()-1000).toISOString(),repeat:'once'});
   await Promise.all([require('../src/wasched').tick('extra'),require('../src/wasched').tick('extra')]);
-  check('personal scheduler uses its own session and does not overlap',()=>{assert.deepEqual(sessions,['extra:contact']);assert.equal(db.WAS.get(wid).enabled,0);});
+  check('personal scheduler uses its own session and does not overlap',()=>{assert.deepEqual(sessions,['extra:923001234567@s.whatsapp.net']);assert.equal(db.WAS.get(wid).enabled,0);});
   const realNow=Date.now; Date.now=()=>Date.parse('2026-03-07T15:00:00Z');
   try {
     check('daily schedule preserves wall time across daylight saving',()=>assert.equal(power.advance({at:'2026-03-07T14:00:00.000Z',repeat:'daily',tz:'America/New_York'}),'2026-03-08T13:00:00.000Z'));
@@ -79,6 +117,10 @@ let n=0, calls=[]; const check = (name, fn) => { fn(); n++; console.log('✓ ' +
   check('human approval takes precedence over delay buffer',()=>assert.equal(db.Q.one(must).hold_until,''));
   const del=queue.enqueue({sourceJid:'q',sourceMsgId:'4',text:'delayed',targetJids:['a@newsletter']});
   check('delay-only posts retain an automatic release time',()=>assert.ok(Date.parse(db.Q.one(del).hold_until)>Date.now()));
+  const beforeCount=queue.pendingCount();
+  d.transaction(()=>{const add=d.prepare("INSERT INTO approvals(source_jid,source_msg_id,text,status) VALUES('count-test',?,'test','pending')");for(let i=0;i<501;i++)add.run(String(i));})();
+  check('pending queue count is exact beyond 500',()=>assert.equal(queue.pendingCount(),beforeCount+501));
+  d.prepare("DELETE FROM approvals WHERE source_jid='count-test'").run();
   const a=ledger.claim('persist','crash','a',0,'h'); ledger.finish('persist','crash','a',0,'uncertain','','offline');
   check('journal table is part of the standard schema',()=>assert.ok(d.prepare("SELECT name FROM sqlite_master WHERE name='delivery_attempts'").get()));
   let denied=false; try { await require('../src/ai').call('secret'); } catch(e) { denied=/sharing is off/i.test(e.message); }

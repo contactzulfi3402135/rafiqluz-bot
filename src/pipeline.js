@@ -10,6 +10,7 @@ const { S, CH, P, SR, RC, AUD, LAT, P5A, GL } = require('./db');
 const ai = require('./ai');
 const wa = require('./wa');  // runtime-only: socket for media recovery + channel names
 const publishMod = require('./publish');
+const crypto = require('node:crypto');
 const templates = require('./templates');   // v7.5.0: post template formatting (text only)
 const queue5a = require('./queue5a');       // 5A: approval/hold queue (R37/R43/R47/R48)
 
@@ -223,15 +224,13 @@ async function downloadRawChannel(m) {
   for (const url of candidates) {
     for (let a = 1; a <= 2; a++) {
       try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
-        if (!res.ok) throw new Error(`CDN HTTP ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
+        const buf = await require('./safe-public-fetch').fetchPublic(url,{maxBytes:64*1024*1024,timeoutMs:90000});
         if (!buf.length) throw new Error('CDN returned 0 bytes');
         // newsletters carry fileSha256 over the PLAINTEXT — verify (warn only)
         if (body.fileSha256 && body.fileSha256.length) {
           const expected = Buffer.from(body.fileSha256).toString('hex');
           const actual = require('crypto').createHash('sha256').update(buf).digest('hex');
-          if (actual !== expected) ring.warn('media.sha256', `Channel media sha256 mismatch — accepting anyway (${String(m.key?.remoteJid || '').slice(-6)}\u2026)`);
+          if (actual !== expected) { ring.warn('media.sha256', 'Channel media failed its integrity check; refusing these bytes.'); throw new Error('Channel media integrity check failed'); }
         }
         return buf;
       } catch { /* try next candidate / attempt */ }
@@ -265,7 +264,9 @@ async function downloadMedia(m) {
           }
         }
       }
-    } catch { /* fall through */ }
+    } catch { /* no verified recovery */ }
+    // Do not bypass public-address and size checks through another downloader.
+    throw new Error('Source channel media could not be recovered securely');
   }
 
   // KEYED media (or keyless without urls) — Baileys' downloader with key refresh.
@@ -286,17 +287,19 @@ async function intake(m) {
     if (S.getBool('panic.on', false)) return;       // 5E (R73): panic stop — same resume-on-restore guarantee
     const jid = String(m.key?.remoteJid || '');
     if (!jid.endsWith('@newsletter')) return;         // channels only
-    const src = CH.listActiveSources().find((s) => s.jid === jid);
+    const src = CH.getActiveSource(jid);
     if (!src) return;                                  // not an active source
     const id = String(m.key?.id || '');
     if (!id) return;
-    if (P.seen(jid, id)) { handleSourceEdit(jid, id, m); return; } // 5A (R44): known id = re-delivery OR source edit
     const dedupeKey = `${jid}:${id}`;
-    if (inFlight.has(dedupeKey)) return;               // already being processed (double event)
+    // A row can be recorded before its provider call has finished. A duplicate
+    // arriving in that interval is not an edit and must not race the first send.
+    if (inFlight.has(dedupeKey)) return;
+    if (P.seen(jid, id)) { await handleSourceEdit(jid, id, m); return; }
     inFlight.add(dedupeKey);
-    try {
-      await processOne(m, src, jid, id);
-    } finally {
+    try { await processOne(m, src, jid, id); }
+    finally {
+      try { rememberSourceText(jid,id,m); } catch { /* without a baseline no automatic edit is permitted */ }
       inFlight.delete(dedupeKey);
     }
   } catch (err) {
@@ -310,63 +313,84 @@ async function intake(m) {
     @newsletter-only contract are untouched (R2: additive, never loosened). */
 async function intakeRss({ jid, id, text, ts, title, link, url, sourceName }) {
   try {
-    if (S.getBool('mirror.paused', false)) return;  // same pause guarantee as WA intake
-    if (S.getBool('panic.on', false)) return;       // 5E (R73): panic stop holds RSS too
-    if (!String(jid || '').endsWith('@rss')) return; // only OUR rss pseudo-jids, ever
-    const src = CH.listActiveSources().find((s) => s.jid === jid);
-    if (!src) return;                               // paused/removed feed → nothing
-    if (!id || P.seen(jid, id)) return;             // pipeline dedupe (rss_seen is a second belt)
+    if (require('./lifecycle').isStopping() || S.getBool('mirror.paused', false) || S.getBool('panic.on', false)) return {state:'deferred'};
+    if (!String(jid || '').endsWith('@rss') || !id) return {state:'invalid'};
+    const src = CH.getActiveSource(jid);
+    if (!src) return {state:'deferred'};
+    if (P.seen(jid,id)) return {state:'recorded'};
     const dedupeKey = jid + ':' + id;
-    if (inFlight.has(dedupeKey)) return;
+    if (inFlight.has(dedupeKey)) return {state:'deferred'};
     inFlight.add(dedupeKey);
     try {
       const body = String(text || '').slice(0, 6000);
-      const m = {
-        key: { remoteJid: jid, id, fromMe: false },
-        message: { extendedTextMessage: { text: body } },
-        messageTimestamp: Math.floor(Number(ts) / 1000) || Math.floor(Date.now() / 1000)
-      };
-      await processOne(m, src, jid, id);
+      const m = {key:{remoteJid:jid,id,fromMe:false},message:{extendedTextMessage:{text:body}},messageTimestamp:Math.floor(Number(ts)/1000)||Math.floor(Date.now()/1000)};
+      await processOne(m,src,jid,id);
+      return {state:P.seen(jid,id) ? 'recorded' : 'deferred'};
     } finally { inFlight.delete(dedupeKey); }
   } catch (err) {
     ring.error('pipeline.error', `RSS pipeline error (${sourceName || jid}): ${err.message}`);
+    return {state:P.seen(jid,id) ? 'recorded' : 'deferred'};
   }
 }
 
 /* 5A (R44): a source edits one of its own published posts.
    Policy (Setting "When a source edits its post"): ignore (default) /
    mark-edited / update-post (update-post only works while Auto-post-edit is on). */
-function handleSourceEdit(jid, id, m) {
-  const policy = String(S.get('post.sourceedit.policy', 'ignore'));
-  if (policy === 'ignore') return;
-  const postId = P.postId(jid, id);
-  if (!postId) return;
-  const d = require('./db').open();
-  const row = d.prepare('SELECT * FROM posts WHERE id=?').get(postId);
-  if (!row) return;
-  const x = extract(m);
-  const newNorm = normalizeText(String(x.text || ''));
-  if (newNorm && newNorm === normalizeText(String(row.reason || ''))) return; // same content — a re-delivery, not an edit
-  AUD.log('source', 'post.source-edited', `Source ${jid} edited a post already handled by the bot (policy: ${policy})`);
-  if (policy === 'mark') {
-    P.setStatus(postId, 'edited', 'source edited the original post');
-    ring.info('sourceedit.mark', `A source edited one of its posts — the history row is marked as edited (${jid})`);
-    return;
-  }
-  if (!on('editposts')) { ring.warn('sourceedit.blocked', `Source edited a post, but "update post" only works while Auto-post-edit is on`); return; }
-  (async () => {
-    try {
-      let body = await ai.beautify(String(x.text || ''), templates.styleHint());
-      const applied = templates.apply(body || x.text, {});
-      const newFinal = String(applied.text || '').trim();
-      if (!newFinal) throw new Error('the edited text is empty');
-      const res = await publishMod.editPublished(jid, id, newFinal);
-      d.prepare('UPDATE posts SET body=? WHERE id=?').run(newFinal.slice(0, 4096), postId);
-      ring.info('sourceedit.update', `Source edit applied to ${res.ok} target(s) (${jid})`);
-    } catch (err) {
-      ring.warn('sourceedit.fail', `Could not apply the source edit: ${err.message}`);
+const sourceEditInFlight = new Set();
+function sourceTextDigest(m) {
+  const text = String(extract(m).text || '');
+  return text.trim() ? crypto.createHash('sha256').update(text,'utf8').digest('hex') : '';
+}
+function rememberSourceText(jid,id,m) {
+  const hash=sourceTextDigest(m);if(!hash)return;
+  require('./db').open().prepare("UPDATE posts SET source_text_digest=? WHERE source_jid=? AND source_msg_id=? AND COALESCE(source_text_digest,'')=''").run(hash,jid,id);
+}
+function sourceEditNeedsReview(jid,postId) {
+  const rule=SR.get(jid),source=CH.getActiveSource(jid),active=new Set(CH.listActiveTargets().map(t=>t.jid));
+  const mapped=String(source?.targets || '').split(',').map(x=>x.trim()).filter(Boolean),keys=P.keys(postId);
+  return on('aipilot')||on('aisafety')||on('routing')||on('matrix')||
+    ['translate','tldr','autobold','emojibullets','linktools','headers','hashtags','signature'].some(on)||
+    Boolean(GL.list().length)||Boolean(rule.include||rule.exclude||rule.active_from||rule.active_to||rule.max_per_day||rule.auto_pause)||
+    (on('queue')&&(rule.approve_first||Number(S.get('queue.delay.min','0'))>0))||
+    !source||!keys.length||keys.some(k=>!active.has(k.target_jid)||(mapped.length&&!mapped.includes(k.target_jid)));
+}
+async function handleSourceEdit(jid, id, m) {
+  const policy=String(S.get('post.sourceedit.policy','ignore'));
+  if(!['mark','update'].includes(policy))return;
+  const postId=P.postId(jid,id);if(!postId)return;
+  const d=require('./db').open(),row=d.prepare('SELECT status,source_text_digest FROM posts WHERE id=?').get(postId);
+  // Old backups and posts recorded before a digest was introduced have no
+  // trustworthy baseline. A redelivery could otherwise be mistaken for an edit.
+  if(!row || !row.source_text_digest || !['published','edited'].includes(row.status))return;
+  const hash=sourceTextDigest(m);if(!hash || hash===row.source_text_digest)return;
+  if(policy==='update' && !on('editposts'))return;
+  const key=JSON.stringify([jid,id]);if(sourceEditInFlight.has(key))return;
+  sourceEditInFlight.add(key);
+  try {
+    // Claim before touching the network. A crash or uncertain response is not
+    // automatically retried; the owner must inspect the copies manually.
+    const claimed=d.prepare('UPDATE posts SET source_text_digest=? WHERE id=? AND source_text_digest=?').run(hash,postId,row.source_text_digest).changes;
+    if(!claimed)return;
+    AUD.log('source','post.source-edited','A source post changed; the configured source-edit policy was applied.');
+    if(policy==='mark') {
+      P.setStatus(postId,'edited','Source text changed; no target edit was requested.');
+      ring.info('sourceedit.mark','A source post changed; its history row was marked.');
+      return;
     }
-  })().catch(() => { });
+    try {
+      const x=extract(m),text=String(x.text || '');
+      // The edit shortcut does not run the full publish pipeline. Do not let
+      // it bypass routing, human approval, safety or configured transforms.
+      if(sourceEditNeedsReview(jid,postId)||blockedWord(text))throw Error('Configured safety, routing, approval, target or formatting rules require manual review.');
+      const useAi=on('beautify');let body=useAi ? await ai.beautify(text,templates.styleHint()) : ai.regexClean(text);
+      const applied=templates.apply(body || x.text,{}),newFinal=String(applied.text || '').trim();
+      if(!newFinal)throw Error('The edited text is empty.');
+      const fresh=d.prepare('SELECT status,source_text_digest FROM posts WHERE id=?').get(postId);
+      if(useAi!==on('beautify')||!on('editposts')||S.get('post.sourceedit.policy','ignore')!=='update'||!fresh||fresh.source_text_digest!==hash||!['published','edited'].includes(fresh.status)||sourceEditNeedsReview(jid,postId)||blockedWord(text)||blockedWord(newFinal))throw Error('Settings, safety or history changed; manual review is required.');
+      const res=await publishMod.editPublished(jid,id,newFinal);
+      ring.info('sourceedit.update',`Source edit: ${res.ok} request(s) accepted, ${res.errors.length} not confirmed; check the targets before retrying.`);
+    } catch(err) {try{d.prepare('UPDATE posts SET reason=? WHERE id=?').run('Source edit not confirmed; inspect target copies before retrying.',postId)}catch{}ring.warn('sourceedit.fail',`Source edit was not confirmed. Inspect target copies before retrying: ${err.message}`);}
+  } finally {sourceEditInFlight.delete(key);}
 }
 
 /* 5A (R40): the same story reaches two sources in the window → publish ONCE,
@@ -508,13 +532,12 @@ async function processOne(m, src, jid, id) {
         mediaKind = parts.media.kind;
         mediaMime = parts.media.msg?.mimetype || 'image/jpeg';
       } catch (err) {
-        if (!parts.text) {
-          P.mark(jid, id, 'failed', `media unfetchable: ${err.message}`);
-          ring.info('post.skip.empty', `Post counted as FAILED: no usable text and its media could not be fetched (${parts.type})`);
-          require('./alerts').maybe('failed', 'A post failed — media unfetchable', `${src.name || jid}: ${err.message}`); // 5D (R65)
-          return;
-        }
-        ring.warn('media.fail', `Media could not be fetched — posting text only (${err.message})`);
+        // Never silently publish a text-only substitute for a source post that
+        // included an image/video/document. Preserve the failure for review.
+        P.mark(jid,id,'failed',`media unavailable; nothing sent: ${err.message}`,parts.text || '',true);
+        ring.warn('media.fail',`Source media could not be fetched; the post was not sent (${err.message})`);
+        require('./alerts').maybe('failed','A post failed — media unavailable',`${src.name || jid}: ${err.message}`);
+        return;
       }
     }
     if (!parts.text && !mediaBuf) {
@@ -626,7 +649,7 @@ async function processOne(m, src, jid, id) {
     // compose (v7.6.0 spec order): clean/beautify → translate → TEMPLATE →
     // hashtags → global header/footer. A template's own header/footer zones
     // override the global ones for that post.
-    let body = await ai.beautify(parts.text, templates.styleHint());
+    let body = on('beautify') ? await ai.beautify(parts.text, templates.styleHint()) : ai.regexClean(parts.text);
     if (on('translate')) {
       const lang = String(S.get('ai.translate.lang', '')).trim();
       if (lang) body = await ai.translate(body || parts.text, lang);
@@ -782,7 +805,7 @@ async function processOne(m, src, jid, id) {
       const lagSec = m.messageTimestamp ? Math.max(0, Math.round(Date.now() / 1000 - m.messageTimestamp)) : null;
       /* v9.0.0 (owner policy): the media is now in the target channel — delete
          the local copy (any size; nothing kept after posting). Text stays. */
-      if (mediaBuf) { try { require('./db').IB.clearMediaForMsg('main', jid, id); ring.info('post.media.cleaned', `Post media deleted right after publishing (${mediaKind}) — it lives in the target channel now`); } catch { } }
+      if (mediaBuf && S.getBool('inbox.deletePublishedMedia',false)) { try { require('./db').IB.clearMediaForMsg('main', jid, id); ring.info('post.media.cleaned', `Post media deleted right after publishing (${mediaKind}) — it lives in the target channel now`); } catch { } }
       ring.info('post.published', `Published from ${src.name || jid}: ${result.sent}/${result.sent + result.failed} targets${mediaBuf ? `, 1 ${mediaKind}` : ''}${partTexts.length > 1 ? `, ${partTexts.length} parts` : ''}${lagSec != null ? ` (${lagSec}s after the source post)` : ''}`);
       try { require('./webhooks').fire('post.published', { source: src.name || jid, sent: result.sent, failed: result.failed, via: targets.map((t) => t.jid).join(', ') }); } catch { } // 5G (R80)
     } else if (result.failed) {
@@ -812,7 +835,7 @@ function inspectText(text, { sourceJid = '', hasMedia = false } = {}) {
   const gates = [];
   const addGate = (name, fired, detail) => gates.push({ name, fired: Boolean(fired), detail: String(detail || '') });
   let t = String(text || '');
-  const src = sourceJid ? CH.listActiveSources().find((s) => s.jid === sourceJid) : null;
+  const src = sourceJid ? CH.getActiveSource(sourceJid) : null;
   const srcName = (src && (src.name || sourceJid)) || (sourceJid || '');
 
   /* ---- safety gates (read-only checks; in the real pipeline these precede compose) ---- */
@@ -939,6 +962,6 @@ module.exports = {
   intake, intakeRss, extract, routeAllowed, isNearDuplicate, splitParts, normalizeText, handleSourceEdit, emojiBullets, blockedWord,
   stripTrackingParams, smartMediaCheck, inspectText, counters,
   switches: () => { const o = {}; for (const k of Object.keys(SWITCH_DEFAULTS)) o[k] = on(k); return o; },
-  setSwitch: (k, v) => { if (!(k in SWITCH_DEFAULTS)) throw new Error(`unknown switch: ${k}`); S.set(`power.${k}.on`, v ? '1' : '0'); },
+  setSwitch: (k, v) => { if (!Object.hasOwn(SWITCH_DEFAULTS, k)) throw new Error(`unknown switch: ${k}`); if (typeof v !== 'boolean') throw new Error('Switch state must be true or false.'); S.set(`power.${k}.on`, v ? '1' : '0'); },
   SWITCH_DEFAULTS
 };

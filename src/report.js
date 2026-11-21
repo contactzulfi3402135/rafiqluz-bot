@@ -64,6 +64,7 @@ function weeklyText() {
 }
 
 async function sendWeekly({ now = false } = {}) {
+  if (require('./panic').active() || require('./lifecycle').isStopping()) throw Error('Panic stop or shutdown is active.');
   const text = weeklyText();
   const sent = [];
   const phone = S.get('report.phone', S.get('main.phone', ''));
@@ -86,7 +87,8 @@ async function sendWeekly({ now = false } = {}) {
     if (!self) throw new Error('no email account connected');
     const r = await email.sendOrQueue({ to: self, subject: `Raqifluz weekly report — ${weekKey()}`, body: text.replace(/\*/g, '') });
     if (r && r.queued) sent.push('email (queued)');
-    else sent.push(`email ${self}`);
+    else if(r?.sent > 0) sent.push(`email ${self} (accepted)`);
+    else throw Error('Email acceptance was not confirmed.');
   } catch (e) { emailErr = String(e.message || e).slice(0, 120); }
   const ok = sent.length > 0;
   if (now) ring.info('weekly.sent.now', `Weekly report sent now: ${sent.join(', ') || 'nowhere'}`);
@@ -99,7 +101,7 @@ async function sendWeekly({ now = false } = {}) {
 function start() {
   setInterval(async () => {
     try {
-      if (require('./panic').active()) return; // 5E (R73): panic stop
+      if (require('./panic').active() || require('./lifecycle').isStopping()) return; // 5E (R73): panic stop
       if (!S.getBool('report.enabled', true)) return;
       if (pktHHMM() !== cfg.config.reportAt) return;
       const today = pktDate();
@@ -130,7 +132,7 @@ function start() {
   /* 5D (R63) — the weekly run: same 30 s tick, PKT day+time match, week guard */
   setInterval(async () => {
     try {
-      if (require('./panic').active()) return; // 5E (R73): panic stop
+      if (require('./panic').active() || require('./lifecycle').isStopping()) return; // 5E (R73): panic stop
       if (!S.getBool('power.weekly.on', false)) return;
       const w = weeklyConfig();
       if (pktDayName() !== w.day || pktHHMM() !== w.hhmm) return;

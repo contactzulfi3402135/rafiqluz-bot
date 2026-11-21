@@ -14,6 +14,11 @@ d.exec('CREATE TABLE IF NOT EXISTS test_future_feature(id INTEGER PRIMARY KEY, v
 let old=path.join(path.dirname(config.config.paths.database),'old-snapshot.sqlite');try{fs.unlinkSync(old)}catch{};
 d.exec(`VACUUM INTO '${old.replace(/'/g,"''")}'`);
 const Database=require('better-sqlite3');const other=new Database(old);other.exec('DROP TABLE test_future_feature');other.close();
+check(()=>{const before=d.prepare('SELECT COUNT(*) n FROM settings').get().n;const p=backup.previewFromBuffer(fs.readFileSync(old));assert.match(p.sha256,/^[a-f0-9]{64}$/);assert.equal(p.tables.find(t=>t.name==='test_future_feature').action,'preserve');assert.equal(p.tables.find(t=>t.name==='settings').action,'replace');assert.equal(d.prepare('SELECT COUNT(*) n FROM settings').get().n,before);assert.equal(backup.listPreRestore().length,0);assert.equal(d.prepare('SELECT value FROM test_future_feature').get().value,'keep-new-data');},'backup preview is non-mutating and describes preserved tables');
+check(()=>assert.throws(()=>backup.previewFromBuffer(Buffer.from('not sqlite'))),'invalid backup preview rejected without mutation');
+check(()=>{assert.throws(()=>backup.restoreFromBuffer(fs.readFileSync(old)),/Engage panic stop/);assert.equal(d.prepare('SELECT value FROM test_future_feature').get().value,'keep-new-data')},'database restore requires panic stop before changing anything');
+db.S.set('panic.on','1');
 check(()=>{backup.restoreFromBuffer(fs.readFileSync(old));assert.equal(d.prepare('SELECT value FROM test_future_feature').get().value,'keep-new-data')},'older backup preserves tables it does not contain');
-check(()=>assert.throws(()=>backup.restoreFromBuffer(Buffer.from('not sqlite'))),'invalid restore rejected');
+check(()=>{assert.equal(db.S.get('panic.on'),'1');assert.equal(db.S.get('mirror.paused'),'1');require('../src/panic').restore();assert.equal(db.S.get('mirror.paused'),'1')},'restore keeps panic engaged and prevents automatic mirroring on panic clearance');
+db.S.set('panic.on','1');check(()=>assert.throws(()=>backup.restoreFromBuffer(Buffer.from('not sqlite'))),'invalid restore rejected');
 console.log(`PASS: ${count} backup checks`);d.close();fs.rmSync(tmp,{recursive:true,force:true});

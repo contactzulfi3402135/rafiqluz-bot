@@ -1,17 +1,17 @@
 'use strict';
 /**
  * v6.2.0 — AI engine with TWENTY providers (OpenRouter, Token Harbor, Gemini,
- * ChatGPT, Grok, Claude, …). Every provider speaks the OpenAI-compatible
- * chat-completions language, so one call path serves them all. Free by default
- * (OpenRouter free model works on a $0 balance), auto-falls-back to the free
- * model on 402, escalating quiet pauses on 429, honest per-failure classes.
+ * ChatGPT, Grok, Claude, …). Claude uses the native Messages protocol; other
+ * configured providers use chat-completions. Availability, pricing and model
+ * identifiers depend on provider accounts. OpenRouter can fall back on 402;
+ * provider failures can trigger escalating pauses.
  * Posts NEVER block on AI.
  */
 const { ring } = require('./logger');
 const { S } = require('./db');
 const cfg = require('./config');
 
-const FREE_MODEL = 'deepseek/deepseek-v4-flash:free';   // v7.2: free-tier default (Oct 2026 lineup)
+const FREE_MODEL = 'deepseek/deepseek-v4-flash:free';   // starter model; availability and price can change
 
 /**
  * The 20 supported AI providers — all OpenAI-compatible endpoints.
@@ -19,16 +19,14 @@ const FREE_MODEL = 'deepseek/deepseek-v4-flash:free';   // v7.2: free-tier defau
  * "Get API key" link that opens in a new tab). free = has a free tier.
  */
 const PROVIDERS = {
-  /* v7.2: built-in catalogs refreshed to the Oct-2026 lineups (verified via each
-     provider's public model docs). Built-ins are only the starter list — after
-     saving a key the dashboard replaces them with the provider's LIVE list, which
-     is always the truth. Each list opens with the recommended default model. */
+  /* Starter suggestions only: provider catalogs and account access change.
+     A live list may be filtered, partial, cached or unavailable. */
   openrouter: { name: 'OpenRouter', keyUrl: 'https://openrouter.ai/keys', url: 'https://openrouter.ai/api/v1/chat/completions', model: FREE_MODEL, free: true, models: ['deepseek/deepseek-v4-flash:free', 'google/gemma-4-31b-it:free', 'qwen/qwen3.8-27b:free', 'qwen/qwen3-coder:free', 'openai/gpt-oss-120b:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'meta-llama/llama-3.3-70b-instruct:free'] },
   tokenharbor: { name: 'Token Harbor', keyUrl: 'https://tokenharbor.ai/', url: 'https://tokenharbor.ai/v1/chat/completions', model: 'gpt-5.5', free: true, models: ['gpt-5.5', 'claude-sonnet-5', 'gemini-3.5-flash', 'grok-4.3', 'deepseek-v4-pro', 'qwen3.8-max', 'glm-5.3-flash', 'mistral-medium-3.5'] }, // one key for GPT/Claude/Gemini/Grok/Qwen — the live list loads after saving the key
   gemini: { name: 'Google Gemini', keyUrl: 'https://aistudio.google.com/app/apikey', url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: 'gemini-3.5-flash', free: true, models: ['gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro', 'gemini-3-flash', 'gemini-omni-flash'] },
   openai: { name: 'OpenAI · ChatGPT', keyUrl: 'https://platform.openai.com/api-keys', url: 'https://api.openai.com/v1/chat/completions', model: 'gpt-5.5', models: ['gpt-5.5', 'gpt-5.5-pro', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5.3-codex', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'o3', 'o3-pro', 'o4-mini'] },
   grok: { name: 'xAI · Grok', keyUrl: 'https://console.x.ai', url: 'https://api.x.ai/v1/chat/completions', model: 'grok-4.3', models: ['grok-4.3', 'grok-4.20-0309-reasoning', 'grok-4.20-0309-non-reasoning'] },
-  claude: { name: 'Anthropic · Claude', keyUrl: 'https://console.anthropic.com/settings/keys', url: 'https://api.anthropic.com/v1/chat/completions', model: 'claude-sonnet-5', models: ['claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-haiku-4-5'] },
+  claude: { name: 'Anthropic · Claude', keyUrl: 'https://console.anthropic.com/settings/keys', url: 'https://api.anthropic.com/v1/messages', model: 'claude-sonnet-5', models: ['claude-sonnet-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-haiku-4-5'] },
   groq: { name: 'Groq', keyUrl: 'https://console.groq.com/keys', url: 'https://api.groq.com/openai/v1/chat/completions', model: 'llama-3.3-70b-versatile', free: true, models: ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'groq/compound', 'groq/compound-mini', 'llama-3.1-8b-instant', 'qwen/qwen3.6-27b'] },
   deepseek: { name: 'DeepSeek', keyUrl: 'https://platform.deepseek.com/api_keys', url: 'https://api.deepseek.com/v1/chat/completions', model: 'deepseek-v4-flash', models: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp'] },
   mistral: { name: 'Mistral AI', keyUrl: 'https://console.mistral.ai/api-keys', url: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-medium-3.5', free: true, models: ['mistral-medium-3.5', 'mistral-large-4', 'mistral-small-latest', 'magistral-medium-latest', 'magistral-small-latest', 'codestral-latest'] },
@@ -105,6 +103,7 @@ function paused(p) {
  *      per provider, and the request is retried without that field — so one
  *      code path stays correct across all 20 different API flavours.
  */
+const boundedResponse = require('./bounded-response');
 const LEARNED = { effortOff: new Set(), maxMCT: new Set(), noTemp: new Set() };
 
 async function rawCall(p, prompt, { timeoutMs = 20000, maxTokens = 700 } = {}, modelOverride = null) {
@@ -120,26 +119,24 @@ async function rawCall(p, prompt, { timeoutMs = 20000, maxTokens = 700 } = {}, m
   const t = setTimeout(() => controller.abort(), timeoutMs);
   const send = async (budget, effort) => {
     const body = { model, messages: [{ role: 'user', content: prompt }] };
-    body[LEARNED.maxMCT.has(p) ? 'max_completion_tokens' : 'max_tokens'] = budget;
-    if (!LEARNED.noTemp.has(p)) body.temperature = 0.4;
+    body[p==='claude' ? 'max_tokens' : (LEARNED.maxMCT.has(p) ? 'max_completion_tokens' : 'max_tokens')] = budget;
+    if (p!=='claude' && !LEARNED.noTemp.has(p)) body.temperature = 0.4;
     if (gem && effort && !LEARNED.effortOff.has(p)) body.reasoning_effort = effort;
-    const res = await fetch(conf.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
+    const headers=p==='claude' ? {'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01'} : {'Content-Type':'application/json',Authorization:`Bearer ${key}`};
+    const res = await fetch(conf.url, {method:'POST',headers,body:JSON.stringify(body),signal:controller.signal,redirect:'error'});
     if (!res.ok) {
-      const detail = (await res.text().catch(() => '')).slice(0, 300);
-      const err = new Error(`HTTP ${res.status}: ${detail || res.statusText}`);
+      // Provider messages are used only for compatibility learning. Do not
+      // display/log echoed credentials or private prompt content.
+      const detail = (await boundedResponse.text(res,65536).catch(() => '')).slice(0, 300).split(key).join('[redacted]');
+      const err = new Error(`HTTP_${res.status}: Provider request failed.`);
       err.code = `HTTP_${res.status}`; err.status = res.status; err.detail = detail;
       throw err;
     }
-    return res.json();
+    return boundedResponse.json(res);
   };
   const textOf = (d) => {
-    _lastUsage = (Number(d?.usage?.prompt_tokens) || 0) + (Number(d?.usage?.completion_tokens) || 0);
-    let out = d?.choices?.[0]?.message?.content;
+    _lastUsage = (Number(d?.usage?.prompt_tokens ?? d?.usage?.input_tokens) || 0) + (Number(d?.usage?.completion_tokens ?? d?.usage?.output_tokens) || 0);
+    let out = p==='claude' ? (Array.isArray(d?.content) ? d.content.filter(x=>x?.type==='text').map(x=>x.text || '').join('') : '') : d?.choices?.[0]?.message?.content;
     if (Array.isArray(out)) out = out.map((x) => (typeof x === 'string' ? x : x?.text || '')).join('');
     return String(out == null ? '' : out).trim();
   };
@@ -149,7 +146,7 @@ async function rawCall(p, prompt, { timeoutMs = 20000, maxTokens = 700 } = {}, m
     for (let i = 0; i < 4; i += 1) {
       try { return await send(budget, effort); }
       catch (err) {
-        if (err.status !== 400 || i === 3) throw err;
+        if (err.status !== 400 || i === 3 || p === 'claude') throw err;
         const d = String(err.detail || '');
         if (/reasoning_effort/i.test(d) && !LEARNED.effortOff.has(p)) LEARNED.effortOff.add(p);
         else if (/max_completion_tokens|max_tokens/i.test(d) && !LEARNED.maxMCT.has(p)) LEARNED.maxMCT.add(p);
@@ -224,6 +221,7 @@ async function transcribe(buf, mime = 'audio/ogg') {
   if (p !== 'gemini') throw new Error('Voice transcription needs a Gemini key (Settings · AI → pin the "Voice transcription" feature to Gemini) — the other providers are not wired for audio input.');
   const key = keyOf(p);
   if (!key) throw new Error('No Gemini key — add one in Settings · AI first.');
+  if(!Buffer.isBuffer(buf)||!buf.length||buf.length>16*1024*1024)throw Error('Voice file must be between 1 byte and 16 MB.');
   const model = featureModel('transcribe') || modelOf(p) || PROVIDERS[p].model;
   const body = {
     contents: [{ parts: [
@@ -235,13 +233,10 @@ async function transcribe(buf, mime = 'audio/ogg') {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(90000)
+    signal: AbortSignal.timeout(90000),redirect:'error'
   });
-  if (!res.ok) {
-    const detail = (await res.text().catch(() => '')).slice(0, 200);
-    throw new Error(`Gemini transcription failed (HTTP ${res.status}): ${detail || res.statusText}`);
-  }
-  const d = await res.json();
+  if (!res.ok) {try{await res.body?.cancel()}catch{}throw new Error(`Gemini transcription failed (HTTP ${res.status}).`);}
+  const d = await boundedResponse.json(res);
   const text = (d?.candidates?.[0]?.content?.parts || []).map((x) => x.text || '').join('').trim();
   if (!text) throw new Error('Gemini returned an empty transcription.');
   try { require('./db').AIU.add('transcribe', p, model, 0, 0); } catch { }
@@ -340,7 +335,7 @@ async function chat(message) {
   const userMsg = String(message || '').trim();
   if (!userMsg) throw new Error('Type a message first.');
   if (!S.getBool('privacy.ai.content', false)) throw new Error('AI content sharing is off. Enable it in Settings → AI first.');
-  if (!usable()) throw new Error('Add an AI key first (Settings → AI provider). The OpenRouter free model works with a $0 balance.');
+  if (!usable()) throw new Error('Add an AI key first (Settings → AI provider). Availability, rate limits and pricing depend on the provider.');
   if (paused(providerOf())) {
     const p = providerOf();
     const mins = Math.max(1, Math.ceil(((pausedUntil[p] || 0) - Date.now()) / 60000));
@@ -403,14 +398,15 @@ async function fetchLiveModels(p, key, timeoutMs = 12000) {
   if (!url) throw new Error('no models endpoint');
   const headers = {};
   if (p === 'claude') { headers['x-api-key'] = key; headers['anthropic-version'] = '2023-06-01'; }
+  else if(p==='gemini' && key) headers['x-goog-api-key']=key;
   else if (key) headers.Authorization = `Bearer ${key}`;
-  const full = p === 'gemini' && key ? `${url}?key=${encodeURIComponent(key)}&pageSize=200` : url;
+  const full = p === 'gemini' ? `${url}?pageSize=200` : url;
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(full, { headers, signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const res = await fetch(full, { headers, signal: controller.signal, redirect:'error' });
+    if (!res.ok) {try{await res.body?.cancel()}catch{}throw new Error(`HTTP ${res.status}`);}
+    const data = await boundedResponse.json(res);
     const raw = data.data || data.models || [];
     let list = raw.map((m) => String(m.id || m.name || '').trim()).filter(Boolean);
     if (p === 'gemini') {                     // "models/gemini-2.5-flash" → "gemini-2.5-flash", chat-capable only

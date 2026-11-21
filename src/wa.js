@@ -114,6 +114,19 @@ async function sendToChannel(socket, jid, content) {
   return sent.key.id;
 }
 
+// Channel mutations fail closed if the current linked account is not known to
+// be an owner/admin. A permission check cannot guarantee that the provider will
+// accept the operation, nor prevent a role changing after the check.
+async function guardChannelMutation(socket,jid,targetMsgId) {
+  const stopped=()=>require('./panic').active()||require('./lifecycle').isStopping();
+  if(stopped()) throw Error('Panic stop or shutdown is active.');
+  if(!/^[A-Za-z0-9._-]+@newsletter$/.test(String(jid||'')))throw Error('A WhatsApp channel is required; no operation was started.');
+  if(typeof targetMsgId!=='string'||!targetMsgId.trim()||targetMsgId.length>200||targetMsgId==='undone')throw Error('A valid recorded message ID is required.');
+  const meta=await channelMeta(socket,jid);
+  if(!meta||!meta.canPost)throw Error('Current owner/admin status could not be verified; no operation was started.');
+  if(stopped())throw Error('Panic stop or shutdown is active; no operation was started.');
+}
+
 /**
  * EDIT a published channel post (OWNER/ADMIN only). Mirrors the real
  * WhatsApp-Web newsletter edit: the target message's OWN id + edit="8"?? no —
@@ -123,6 +136,7 @@ async function sendToChannel(socket, jid, content) {
  * new plaintext. Server ACKs then applies.
  */
 async function editChannelPost(socket, jid, targetMsgId, newText) {
+  await guardChannelMutation(socket,jid,targetMsgId);
   // VERIFIED against Baileys 6.7.24's own newsletter send path
   // (messages-send.js: edit='1'; generics.js: plaintext = proto.Message.encode(...)):
   // the plaintext is a protobuf Message wrapping a MESSAGE_EDIT protocolMessage —
@@ -142,7 +156,8 @@ async function editChannelPost(socket, jid, targetMsgId, newText) {
     attrs: { to: jid, id: targetMsgId, type: 'text', edit: '1' },
     content: [{ tag: 'plaintext', attrs: {}, content: bytes }]
   };
-  await socket.query({ type: 'set', node, timeoutMs: 15000 });
+  try { await socket.query({ type: 'set', node, timeoutMs: 15000 }); }
+  catch { throw Error('Provider response not confirmed; inspect the channel before retrying.'); }
   return true;
 }
 
@@ -155,12 +170,14 @@ async function editChannelPost(socket, jid, targetMsgId, newText) {
  * that bug family is dead forever.
  */
 async function deleteChannelPost(socket, jid, targetMsgId) {
+  await guardChannelMutation(socket,jid,targetMsgId);
   const node = {
     tag: 'message',
     attrs: { to: jid, id: targetMsgId, type: 'text', edit: '8' },
     content: [{ tag: 'plaintext', attrs: {}, content: Buffer.alloc(0) }]
   };
-  await socket.query({ type: 'set', node, timeoutMs: 15000 });
+  try { await socket.query({ type: 'set', node, timeoutMs: 15000 }); }
+  catch { throw Error('Provider response not confirmed; inspect the channel before retrying.'); }
   return true;
 }
 
@@ -168,10 +185,11 @@ async function deleteChannelPost(socket, jid, targetMsgId) {
  *  role: OWNER / ADMIN = can post · GUEST / SUBSCRIBER = followed only · '' = not followed. */
 async function channelMeta(socket, jid) {
   try {
+    let timer;
     const meta = await Promise.race([
-      socket.newsletterMetadata('jid', jid),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('metadata timeout')), 10000))
-    ]);
+      Promise.resolve().then(()=>socket.newsletterMetadata('jid', jid)),
+      new Promise((_, rej) => { timer=setTimeout(() => rej(new Error('metadata timeout')), 10000); })
+    ]).finally(()=>clearTimeout(timer));
     if (!meta) return null;
     const name = meta?.name || meta?.thread_metadata?.name?.text || '';
     const role = String(
@@ -252,8 +270,11 @@ async function connect() {
         }
         if (best) {
           quarantineRestoreDone = true;
-          fs.rmSync(sessionDir, { recursive: true, force: true });
-          fs.renameSync(best.q, sessionDir);
+          // Preserve the current session directory for manual recovery rather
+          // than deleting its files while restoring older credentials.
+          const displaced = `${sessionDir}.displaced-${Date.now()}-${require('crypto').randomBytes(4).toString('hex')}`;
+          fs.renameSync(sessionDir, displaced);
+          try { fs.renameSync(best.q, sessionDir); } catch (e) { try { fs.renameSync(displaced,sessionDir); } catch {} throw e; }
           hadCreds = true;
           ring.warn('wa.creds.restore', `Restored the saved login WhatsApp accepted earlier — trying it BEFORE any QR`);
         }
